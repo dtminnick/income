@@ -1,8 +1,7 @@
 ---
 title: "Predicting Income Level from Demographic and Behavioral Factors"
 subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic Regression Approaches"
-author: "Donnie Minnick"
-course: "Statistical Learning - Fall A 2025"
+author: "Donnie Minnick, Statistical Learning - Fall A 2025"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
   html_document:
@@ -173,6 +172,132 @@ for (pair in cat_pairs) {
 ```
 
 ## Transformations
+
+### Career Stage
+
+I'll engineer a `career_stage` feature with four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60, and 4) retirement transition (ages 61+).  See **Appendices | Appendix A: Exploratory Data Analysis | Age** section for rationale.
+
+### Workclass Group
+
+I'll engineer a `workclass_group` feature with four groups: 1) not employed, 2) self-employed, 3) government, and 4) private.  Will also address missing values.  See **Appendices | Appendix A: Exploratory Data Analysis | Workclass** section for rationale.
+
+```{r}
+income <- income %>%
+  mutate(workclass_group = case_when(workclass_cat %in% c("Without-pay", "Never-worked") ~ "Not-employed",
+                                     workclass_cat %in% c("Self-emp-inc", "Self-emp-not-inc") ~ "Self-employed",
+                                     workclass_cat %in% c("Local-gov", "State-gov", "Federal-gov") ~ "Government",
+                                     workclass_cat == "Private" ~ "Private",
+                                     is.na(workclass_cat) | workclass_cat == "?" ~ "Unknown",
+                                     TRUE ~ "Other"))
+```
+
+### Education Level (Ordinal Coding)
+
+I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.  See **Appendices | Appendix A: Exploratory Data Analysis | Education** section for rationale.
+
+```{r}
+education_levels <- c(
+  "Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", "10th", "11th", "12th",
+  "HS-grad", "Some-college", "Assoc-voc", "Assoc-acdm",
+  "Bachelors", "Masters", "Prof-school", "Doctorate"
+)
+
+income <- income %>%
+  mutate(education_level_ord = factor(education_cat, levels = education_levels, ordered = TRUE))
+```
+
+### Years of Education
+
+Years of education is essentially a numeric encoding of `education_cat` and the two are tightly coupled, i.e. each education category maps to a fixed number of years.  I'm already planning to use `education_level` and this variable will add no new information.  Including it risks multicollinearity, could inflate standard errors and obscure the true effect of education.  I'll exclude this variable as part of data transformations.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Years of Education** section for rationale.
+
+### Marital Group
+
+Collapsing sparse categories may improve model stability and interpretability, e.g. married, non-traditional married, previously married, never married.  Will address as part of data transformations.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Marital Status** section for rationale.
+
+### Occupation Group
+
+Will engineer a grouped variable for comparison purposes so that each group reflects a coherent socioeconomic role and to avoid categories with low counts.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Occupation** section for rationale.
+
+```{r}
+income <- income %>%
+  mutate(
+    occupation_group = case_when(occupation_cat %in% c("Prof-specialty", 
+                                                       "Exec-managerial") ~ "Professional/Managerial",
+    occupation_cat %in% c("Craft-repair", 
+                          "Transport-moving", 
+                          "Machine-op-inspct", 
+                          "Handlers-cleaners",
+                          "Protective-serv", 
+                          "Tech-support") ~ "Skilled Trades",
+    occupation_cat %in% c("Adm-clerical", 
+                          "Sales") ~ "Clerical/Sales",
+    occupation_cat %in% c("Other-service", 
+                          "Priv-house-serv") ~ "Service Roles",
+    occupation_cat == "Farming-fishing" ~ "Agricultural",
+    occupation_cat == "Armed-Forces" ~ "Military",
+    is.na(occupation_cat) ~ "Missing/Unknown",
+    TRUE ~ "Other"
+    ))
+```
+
+### Hours Group
+
+Implement hours-based segmentation could be a useful feature in models.  Treating an hours_group as ordered can capture what looks like a monotonic income trend.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Hours Per Week** section for rationale.
+
+```{r}
+income <- incoime %>%
+  mutate(hours_group = case_when(hours_per_week_num < 30 ~ "Underemployed",
+                                 hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
+                                 hours_per_week_num > 45 ~ "Overtime",
+                                 TRUE ~ NA_character))
+```
+
+### Relationship Role
+
+Engineer feature to bin relationships into relationship archetypes that are more gender neutral.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Relationship** section for rationale.
+
+```{r}
+income <- income %>%
+  mutate(relationship_role = case_when(
+    relationship_cat %in% c("Husband", "Wife") & hours_per_week >= 40 ~ "Primary Earner",
+    relationship_cat %in% c("Husband", "Wife") & hours_per_week < 40 ~ "Secondary Earner",
+    relationship_cat %in% c("Not-in-family", "Unmarried") ~ "Independent Adult",
+    relationship_cat %in% c("Own-child", "Other-relative") ~ "Dependent/Other",
+    TRUE ~ "Unclassified"
+  ))
+```
+
+### Race Income Score
+
+An income-weighted race score is a way to numerically encode the average income propensity of each race group based on the observed data.  For each group, we can calculate the proportion of individuals earning greater than $50k.  That proportion becomes the score assigned to every individual in that race group.  It's a way of embedding group-level income behavior into a numeric feature.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Race** section for rationale.
+
+```{r}
+race_income_rate <- income %>%
+  group_by(race) %>%
+  summarise(race_income_score = mean(income == ">50K"))
+
+income <- income %>%
+  left_join(race_income_rate, by = "race")
+```
+
+### Has Investment Activity
+
+```{r}
+income <- income %>%
+  mutate(has_investment_activity = if_else(capital_gain > 0 | capital_loss > 0, 1, 0))
+```
 
 ## Class Balance
 
@@ -453,9 +578,7 @@ list(confusion = confusion,
 
 ## Appendix A: Exploratory Data Analysis
 
-### Age (age_num)
-
-
+### Age
 
 ```{r}
 age <- income %>%
@@ -470,7 +593,9 @@ kable(age,
       align = c("l", "r", "r"))
 ```
 
+This distribution mirrors what you'd expect from a working-age population in the US: a peak around age 20-30, reflecting a large cohort entering the workforce, a gradual decline through ages 40-50, typical of aging out of peak earning years or shifting to preparation for retirement, and dropoff after 60-50, reflecting retirement and reduced representation.
 
+This pattern is clear when plotted.
 
 ```{r}
 ggplot(age, aes(x = age_num, y = entries)) +
@@ -484,9 +609,42 @@ ggplot(age, aes(x = age_num, y = entries)) +
   expand_limits(y = max(age$entries) * 1.2)
 ```
 
-### Workclass (workclass_cat, workclass_num)
+Age is likely nonlinear in its relationship to income class.  Use binning to confirm this dynamic.
 
+```{r}
+# Step 1: Create age bins
+income_age <- income %>%
+  mutate(age_bin = cut(age_num, breaks = seq(15, 90, by = 5), include.lowest = TRUE))
 
+# Calculate proportions within each age bin and income group
+age_income_prop <- income_age %>%
+  group_by(age_bin, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(age_bin) %>%
+  mutate(prop = count / sum(count))
+```
+
+Generate plot.
+
+```{r}
+ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proportion of Income Classes by Age Group",
+       x = "Age Group",
+       y = "Proportion",
+       fill = "Income Class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+This plot shows that income probability doesn't increase linearly with age; rather, it peaks mid-career and then drops.  I'll use a binning strategy to model this non-monotonic pattern, i.e. instead of assuming that each year of age adds the same effect, binning allows me to treat age as a set of behavioral groups.  
+
+I'll engineer a `career_stage` feature with four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60, and 4) retirement transition (ages 61+).
+
+### Workclass
 
 ```{r}
 workclass <- income %>%
@@ -517,11 +675,45 @@ ggplot(workclass, aes(x = forcats::fct_reorder(workclass_cat, entries, .desc = T
   expand_limits(y = max(workclass$entries) * 1.2)
 ```
 
+With 64% of individuals in the Private workclass, the dataset is overwhelmingly skewed toward private-sector employment.  If we include `workclass` as a predictor, models may overfit to the private sector simply because it dominates the sample.  Minority categories will be underrepresented in predictions.  Coefficients for smaller workclasses may be unstable due to the low sample size.  And the private sector may mask behvaioral variation in other groups.
 
+Visualize income class proportions by workclass to reveal whether private-sector dominance translates into higher earnings or just higher representation.
 
-### Education (education_cat, education_num)
+```{r}
+income_by_workclass <- income %>%
+  group_by(workclass_cat, income_cat) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(workclass_cat) %>%
+  mutate(prop = n / sum(n))
+```
 
+```{r}
+ggplot(income_by_workclass, aes(x = workclass_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Income Distribution by Workclass",
+    x = "Workclass",
+    y = "Proportion",
+    fill = "Income"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
 
+Based on this plot, the dominance of private workclass in the sample is not translating into dominance in income proportion.  
+
+Despite being a small portion of the dataset, the Self-emp-inc workclass has the highest proportion of high-income earners.  This suggests that entrepreneurial ventures (when successful) yield higher income, but probably with higher variance.
+
+While the private sector workclass dominates in count, its proportion of high-income earners is not the highest.  This could be a result of a wide range of roles, from lower-wage service jobs to higher-paying finance and technical roles.
+
+The Federal-gov workclass shows a relatively strong proportion of high-income earners, perhaps due to structured pay scales that are common in government organizations.  The State-gov and Local-gov workclasses trail a bit, which probably reflects differences in funding.
+
+The Without-pay and Never-worked workclasses are skewed to the low-income category, which is predictable.  These categories could be dropped or grouped as non-employed to avoid noise in classification models.
+
+I'll engineer a `workclass_group` feature with four groups: 1) not employed, 2) self-employed, 3) government, and 4) private.  Will also address missing values.
+
+### Education
 
 ```{r}
 education <- income %>%
@@ -555,9 +747,48 @@ ggplot(education, aes(x = education_cat, y = entries)) +
   expand_limits(y = max(education$entries) * 1.2)
 ```
 
-### Years of Education (years_of_education_num)
+High school graduates dominate the sample at 32%; this aligns with national trends.  The some-college a bachelors categories together make up 40% of the sample, indicating strong representation.  Advanced degrees are relatively rare; combined they account for ~7% of the sample, which could limit model ability to generalize to highly educated groups.  Low education levels are sparse; these are likely to be older adults or immigrants with limited formal schooling.
+
+Plot income proportions by education.
+
+```{r}
+
+# Step 1: Count income levels per education
+edu_order <- edu_income %>%
+  filter(income_cat == ">50K") %>%
+  arrange(desc(prop)) %>%
+  pull(education_cat)
 
 
+# Step 2: Calculate proportions
+edu_income <- edu_income %>%
+  mutate(education_cat = factor(education_cat, levels = edu_order))
+
+
+# Step 3: Plot
+ggplot(edu_income, aes(x = education_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Income Proportion by Education Level",
+    x = "Education Level",
+    y = "Proportion of Income Category",
+    fill = "Income"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+There's an unmistakable pattern evident in this chart: the gradient from low education levels to advanced degress is a textbook example of socioecomonic stratification.  Still its surprising to see how nonlinear the payoff is.
+
+High income really starts to dominate at the Bachelor level and is an inflection point for income potential.  Advanced degrees show the highest income potential, but this comes with investment of time and potentially debt as well.
+
+I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.
+
+### Years of Education
 
 ```{r}
 years_of_education <- income %>%
@@ -587,16 +818,15 @@ ggplot(years_of_education, aes(x = years_of_education_num, y = entries)) +
   expand_limits(y = max(years_of_education$entries) * 1.2)
 ```
 
-### Marital Status (marital_status_cat, marital_status_num)
+Years of education is essentially a numeric encoding of `education_cat` and the two are tightly coupled, i.e. each education category maps to a fixed number of years.  I'm already planning to use `education_level` and this variable will add no new information.  Including it risks multicollinearity, could inflate standard errors and obscure the true effect of education.  I'll exclude this variable as part of data transformations.
 
-
+### Marital Status
 
 ```{r}
 marital_status <- income %>%
   group_by(marital_status_cat) %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
-
 
 kable(marital_status,
       col.names = c("Marital Status", "Entries", "Percent"),
@@ -621,10 +851,15 @@ ggplot(marital_status, aes(x = forcats::fct_reorder(marital_status_cat, entries,
   expand_limits(y = max(marital_status$entries) * 1.2)
 ```
 
+Married-civ-spouse dominates at 46%.  Never-married follows at 33%.  The rest of the categories are smaller slices, but potentially behaviorally distinct.
 
-### Occupation (occupation_cat, occupation_num)
+Marital status could be a strong socioeconomic signal when predicting income, e.g. married individuals may benefit from dual incomes or household stability.  Never-married or separated individuals might reflect different life stages or economic pressures.
 
+These categories are not ordinal, e.g. widowed or married is not more or less than divorced.
 
+Collapsing sparse categories may improve model stability and interpretability, e.g. married, non-traditional married, previously married, never married.  Will address as part of data transformations.
+
+### Occupation
 
 ```{r}
 occupation <- income %>%
@@ -656,9 +891,20 @@ ggplot(occupation, aes(x = forcats::fct_reorder(occupation_cat, entries, .desc =
   expand_limits(y = max(occupation$entries) * 1.2)
 ```
 
-### Hours Per Week (hours_per_week_num)
+The distribution is relatively balanced across several categories, with no single class dominating.  Occupation can serve as a proxy for income potential, job stability and education level.  Certain occupations skew toward higher income, while others may not.
 
+With some low-frequency classes like armed-forces and privte-house-serv, grouping the categories can help stabilize models.  Will engineer a grouped variable for comparison purposes so that each group reflects a coherent socioeconomic role and to avoid categories with low counts.
 
+| Group Name              | Included Categories             |
+| ----------------------- | ------------------------------- |
+| Professional/Managerial	| Prof-specialty, Exec-managerial |
+| Skilled Trades          | Craft-repair, Transport-moving, Machine-op-inspct, Handlers-cleaners, Protective-serv, Tech-support |
+| Clerical/Sales          | Adm-clerical, Sales             |
+| Service Roles           |	Other-service, Priv-house-serv  | 
+| Agricultural            |	Farming-fishing                 |
+| Military                |	Armed-Forces                    |
+
+### Hours Per Week
 
 ```{r}
 hours_per_week <- income %>%
@@ -686,9 +932,43 @@ ggplot(hours_per_week, aes(x = hours_per_week_num, y = entries)) +
   expand_limits(y = max(hours_per_week$entries) * 1.2)
 ```
 
-### Relationship (relationship_cat, relationship_num)
+There is a sharp and prominent spike at 40 hours, which can be considered a classic full-time benchmark in the US.  It dominates the dataset, reflecting standard employment contracts.  There are smaller peaks at 20, 30, 50 and 60 hours, suggesting common part-time and overtime thresholds.  These are potentially tied to specific industries or roles.  The jagged, irregular tail hints at self-reported data or job-specific norms, e.g. self-employment or gig work.
 
+Treating this variable as continuous will miss behavioral inflection points described above.  Segmenting could better capture under-employment and overtime heavy roles, e.g. under-employment, less than 35 hours, standard full-time employment, 35-45 hours, and overtime-heavy, greater than 45 hours.
 
+What is the proportion of high earners by hours group?
+
+```{r}
+income_by_hours_group <- income %>%
+    mutate(hours_group = case_when(
+    hours_per_week_num < 30 ~ "Underemployed",
+    hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
+    hours_per_week_num > 45 ~ "Overtime",
+    TRUE ~ NA_character_
+  )) %>%
+  group_by(hours_group, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(hours_group) %>%
+  mutate(prop = count / sum(count))
+  
+ggplot(income_by_hours_group, aes(x = hours_group, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Income Proportion by Hours Group",
+    x = "Hours Group",
+    y = "Proportion",
+    fill = "Income Level"
+  ) +
+  theme_minimal()
+
+```
+
+The underemployed group is overwhelmingly low income and likely includes part-time, seasonal or precarious workers.  The full-time group is majority under $50k but has a noticeable uptick in high earners.  This suggests that full-time work alone isn't a guarantee of higher income.  The overtime group has the most balanced distribution; it probably includes a mix of skilled labor, self-employed individuals and salaried workers with performance incentives.
+
+Hours-based segmentation could be a useful feature in models.  Treating an hours_group as ordered can capture what looks like a monotonic income trend.
+
+### Relationship
 
 ```{r}
 relationship <- income %>%
@@ -718,9 +998,36 @@ ggplot(relationship, aes(x = forcats::fct_reorder(relationship_cat, entries, .de
   expand_limits(y = max(relationship$entries) * 1.2)
 ```
 
+Husband and not-in-family categories dominate the dataset.  Own-child likely reflects younger individuals or dependents.  The remaining categorties are smaller but distinct.  The distribution suggests that most individuals are either heads of household or living independently.
+
+We need to treat this categorical variable as nominal and collapsing categories may stabilize estimates and improve interpretability.
+
+Collapsing into: 1) spouse, 2) independent, 3) child, and 4) other potentially gives a cleaner variable with four behaviorally meaningful groups.
+
+```{r}
+income_by_relationship_group <- income %>%
+  group_by(relationship_cat, income_cat) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+  # filter(income_cat == ">50K")
+
+ggplot(income_by_relationship_group, aes(x = relationship_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Income Proportion by Relationship Group",
+    x = "Relationship Group",
+    y = "Proportion",
+    fill = "Income Level"
+  ) +
+  theme_minimal()
+```
+
+The husband category has the highest proportion of high earning individuals; this aligns with traditional household structures where husbands are often primary earners.  The Own-child and Other-relative categories lag behind and likely represent dependents, students, or caretakers.  Not-in-family and Unmarried categories have a moderate proportion of high income earners.  These groups are likely to be behaviorally diverse, e.g. singles, cohabiters, roommates, etc.  The Wife category shows mid-level earnings as well; this may reflect secondary earners or part-time workers in dual-income households.  That said, assuming all wives are secondary earners does not hold.
+
+Propose to engineer a feature to bin relationships into behavioral archetypes, e.g. primary earner, dependent, independent adult, etc.  This can reduce noise from sparse categories and enhance interpretability.
+
 ### Race
-
-
 
 ```{r}
 race <- income %>%
@@ -750,9 +1057,37 @@ ggplot(race, aes(x = forcats::fct_reorder(race_cat, entries, .desc = TRUE), y = 
   expand_limits(y = max(race$entries) * 1.2)
 ```
 
+This plot shows that the White category is dominant in the data at 85%, while Black has a 10% representation and all other categories are sparse.  Any model trained on this data will be heavily influenced by the White category and may generalize poorly to other groups.
+
+How does race intersect with income?
+
+```{r}
+race_income_counts <- income %>%
+  group_by(race_cat, income_cat) %>%
+  summarise(count = n(), .groups = "drop")
+
+race_income_props <- race_income_counts %>%
+  group_by(race_cat) %>%
+  mutate(prop = count / sum(count))
+
+ggplot(race_income_props, aes(x = race_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Income Proportions by Race",
+       x = "Race", y = "Proportion",
+       fill = "Income Level") +
+  theme_minimal()
+```
+
+Asian-Pac-Islander has the highest proportion of high earners, White has the second highest proportion, and the remaining categories are predominantly low-income earners, which is potentially an indication of structural disadvantage or underrepresentation in high-income roles.
+
+An income-weighted race score is a way to numerically encode the average income propensity of each race group based on the observed data.  For each group, we can calculate the proportion of individuals earning greater than $50k.  That proportion becomes the score assigned to every individual in that race group.  It's a way of embedding group-level income behavior into a numeric feature.  Will implement as a feature.
+
+It can stablize sparse categories by embedding the income signal and improve interpretability without added complexity.  The score encodes the average proportion of individuals earning greater than $50k within each race category, i.e. it allows modeling of the effect of belonging to a group with a certain income tendency.
+
+In a logistic regression model, it would be interpreted as, holding all other variables constant, the likelihood of being classified as a high-income earner based on the income tendency of the group to which the individual belongs.
+
 ### Gender
-
-
 
 ```{r}
 gender <- income %>%
@@ -782,9 +1117,30 @@ ggplot(gender, aes(x = forcats::fct_reorder(gender_cat, entries, .desc = TRUE), 
   expand_limits(y = max(gender$entries) * 1.2)
 ```
 
+There is an imbalance between male and female representation in the data.  Male dominance means most income patterns will be shaped by male observations.  Female underrepresentation could lead to unstable estimates or biased predictions.  We can treat gender as a binary predictor, and if the models predict income better for males versus females, it may be overfitting the dominant group.
+
+What does the distribution of income look like for males versus females?
+
+```{r}
+income_by_gender <- income %>%
+  group_by(gender_cat, income_cat) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n / sum(n))
+
+ggplot(income_by_gender, aes(x = gender_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proportion of Income Levels by Gender", y = "Proportion")
+
+```
+
+Male Income Split: A noticeable chunk of males earn >50K — visually, it looks like ~30–35%.
+
+Female Income Split: The >50K segment is much smaller — likely ~10–15%.
+
+The coral segment dominates both bars, but especially for females, suggesting a strong income disparity.
+
 ### Capital Gain
-
-
 
 ```{r}
 capital_gain <- income %>%
@@ -812,9 +1168,15 @@ ggplot(capital_gain, aes(x = capital_gain_num, y = entries)) +
   expand_limits(y = max(capital_gain$entries) * 1.2)
 ```
 
+Both capital gain and loss are heavily zero-inflated, and that skew makes them prime candidates for binary transformation. Here's a breakdown of why and how to do it:
+
+Sparse signal: Most individuals have zero capital gain/loss, so the continuous values only apply to a small subset.
+
+Model stability: Continuous skewed variables can distort coefficients or inflate variance in linear models.
+
+Behavioral clarity: A binary flag captures the presence of investment activity, which may correlate with income or occupation.
+
 ### Capital Loss
-
-
 
 ```{r}
 capital_loss <- income %>%
@@ -842,7 +1204,13 @@ ggplot(capital_loss, aes(x = capital_loss_num, y = entries)) +
   expand_limits(y = max(capital_loss$entries) * 1.2)
 ```
 
+Both capital gain and loss are heavily zero-inflated, and that skew makes them prime candidates for binary transformation. Here's a breakdown of why and how to do it:
 
+Sparse signal: Most individuals have zero capital gain/loss, so the continuous values only apply to a small subset.
+
+Model stability: Continuous skewed variables can distort coefficients or inflate variance in linear models.
+
+Behavioral clarity: A binary flag captures the presence of investment activity, which may correlate with income or occupation.
 
 You're looking at a cumulative distribution function (CDF) of capital loss, which tells you the proportion of individuals whose capital loss is less than or equal to a given value. Here's how to interpret the key features:
 
