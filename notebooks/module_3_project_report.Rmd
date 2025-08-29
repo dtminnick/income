@@ -1,0 +1,965 @@
+---
+title: "Predicting Income Level from Demographic and Behavioral Factors"
+subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic Regression Approaches"
+author: "Donnie Minnick"
+course: "Statistical Learning - Fall A 2025"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    theme:
+      version: 4
+      bootswatch: flatly
+      primary: "#2C3E50"   # deep blue
+      secondary: "#18BC9C" # accent teal
+      base_font: "Arial"
+      heading_font: "Calibri"
+---
+
+# Project Overview
+
+This analysis evaluates two modeling approaches - linear regression with an indicator matrix and logistic regression - to determine which more reliably classifies individuals as earning above or below $50,000 per year. Using the [UCI Adult Income dataset](https://archive.ics.uci.edu/dataset/2/adult), the comparison focuses on practical performance measures including accuracy, sensitivity, specificity, and AUC. 
+
+The goal is to identify the method that not only provides stronger predictive capability but also offers clearer insight into how demographic and employment attributes influence income levels.
+
+## Analysis Question
+
+How do linear regression with an indicator matrix and logistic regression compare in their ability to classify individuals as earning above or below $50,000 per year, based on demographic and employment attributes from the UCI Adult Income dataset, in terms of accuracy, sensitivity, specificity, and AUC?
+
+## Data Suitability
+
+The UCI Adult Income dataset is highly appropriate for this analysis because:
+
+**Binary Target Variable**: The income label is already dichotomized as `<=50K` and `>50K`, making it ideal for classification tasks.
+
+**Rich Feature Set**: It includes fourteen attributes spanning age, education, marital status, occupation, hours worked, and more, offering diverse predictors for modeling socioeconomic outcomes.
+
+**Mixed Data Types**: The combination of categorical and continuous variables supports testing how each model handles encoding and feature interactions.
+
+**Real-World Relevance**: The income threshold reflects a meaningful socioeconomic divide, making the classification task practically significant.
+
+## Candidate Models
+
+### Linear Regression with an Indicator Matrix
+
+Linear regression, when applied with a binary indicator response, can be used to estimate probabilities of class membership. Although not traditionally designed for classification, it provides a straightforward benchmark and can reveal how continuous predictors like age or hours worked relate linearly to income. However, it may yield predictions outside the 0–1 range and does not naturally account for the probabilistic nature of binary outcomes.
+
+### Logistic Regression
+
+Logistic regression is a standard method for binary classification, modeling the log-odds of the outcome as a linear combination of predictors. It constrains predicted values between 0 and 1 and provides interpretable coefficients in terms of odds ratios. It is particularly well-suited for this problem and serves as the conventional baseline for evaluating newer or more complex classifiers.
+
+### Why Compare?
+
+Placing these two approaches side by side highlights the importance of choosing models that align with the data structure and research question. By comparing their performance on accuracy, sensitivity, specificity, and AUC, this analysis will demonstrate the trade-offs between a general-purpose regression method and a model purpose-built for classification.
+
+### Baseline Expectations
+
+Before conducting the analysis, it is important to establish expectations about how the candidate models are likely to perform:
+
+**Logistic Regression Advantage**: Because logistic regression is specifically designed for binary classification, it is expected to outperform linear regression in terms of calibration and overall predictive reliability. Its ability to constrain predictions between 0 and 1 aligns naturally with the problem structure.
+
+**Linear Regression Benchmark**: Linear regression with an indicator matrix may provide a useful baseline, but its predictions can extend outside the valid probability range and may not align as well with classification thresholds. Accuracy may be reasonable, but sensitivity and specificity are likely to suffer compared to logistic regression.
+
+**Comparative Outlook**: Logistic regression is anticipated to deliver higher AUC and more balanced classification metrics, while linear regression may illustrate the pitfalls of applying a general-purpose model to a classification task. This contrast should highlight the importance of model choice in predictive analytics.
+
+## Github Repo
+
+All project files are maintained in [this Github repository](https://github.com/dtminnick/income).
+
+## Code Libraries
+
+The analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` for data manipulation, `knitr` for report formatting, and `pROC` for ROC/AUC analysis.
+
+```{r, echo = FALSE}
+library("caret")
+library("dplyr")
+library("ggplot2")
+library("knitr")
+library("pROC")
+library("tidyr")
+```
+
+# Exploratory Data Analysis (Summary)
+
+
+
+# Data Cleaning and Transformation
+
+Load the income data.
+
+```{r}
+income <- readRDS("../data/income.rds")
+```
+
+## Missing Values
+
+This code generates a report summarizing missing values in the dataset at both the column and row level. First, it counts missing values for each variable and calculates the percentage of missingness (col_missing). Then, it computes the total number and percentage of rows containing any missing values (row_missing). Finally, the two summaries are combined into a single table (missing_report) for easy inspection and reporting.
+
+```{r}
+# Create column level summary.
+
+col_missing <- income %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(),
+               names_to = "Variable",
+               values_to = "Missing_Count") %>%
+  mutate(Missing_Pct = Missing_Count / nrow(income) * 100)
+
+# Create row level summary.
+
+row_missing <- tibble(Variable = "Rows with any missing",
+                      Missing_Count = sum(!complete.cases(income)),
+                      Missing_Pct = sum(!complete.cases(income)) / nrow(income) * 100)
+
+# Combine summaries.
+
+missing_report <- bind_rows(col_missing, row_missing)
+
+kable(missing_report,
+      col.names = c("Variable", "Missing Count", "Missing Percent"),
+      caption = "Missing Data",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Approximately 7.36% of rows (2,396 of 32,560) contain missing values, exclusively in the categorical variables related to work class, occupation, and native country. These values cannot be meaningfully imputed, so the affected rows will be removed from the dataset. Given the remaining 30,161 complete records, this approach preserves data integrity and is unlikely to impact model performance or statistical power.
+
+```{r}
+income <- income %>% drop_na()
+```
+
+## Redundancy
+
+With 13 predictors in mixed types (nominal, ordinal, continuous), redundancy checks go beyond simple correlations. Here’s the structured approach I will follow.
+
+### Check Multicollinearity Among Continuous Predictors
+
+```{r}
+cor(income[ , c("age_num",
+                "years_of_education_num",
+                "hours_per_week_num",
+                "capital_gain_num", 
+                "capital_loss_num")], 
+    use = "pairwise.complete.obs")
+```
+
+### Assess Redundancy Among Categorical Predictors
+
+Check associations among categorical variables
+
+```{r}
+nominal_vars <- c("workclass_num",
+                  "marital_status_num",
+                  "occupation_num",
+                  "relationship_num",
+                  "race_num",
+                  "gender_num",
+                  "native_country_num")
+
+income[nominal_vars] <- lapply(income[nominal_vars], factor)
+
+# Pairwise chi-square / Cramer's V
+cat_pairs <- combn(nominal_vars, 2, simplify = FALSE)
+
+for (pair in cat_pairs) {
+  
+  tab <- table(df[[pair[1]]], df[[pair[2]]])
+  
+  cv <- DescTools::CramerV(tab)
+  
+  cat("Cramer's V between", pair[1], "and", pair[2], ":", cv, "\n")
+  
+}
+```
+
+## Transformations
+
+## Class Balance
+
+We kept the natural 75/25 income split so predictions mirror real-world conditions. This ensures performance metrics are meaningful for decision-making, while still allowing models to be tuned for sensitivity and accuracy where it matters most.
+
+# Split Data
+
+The dataset is split into 60% training, 20% validation, and 20% test. This allocation provides enough data to train stable models while dedicating a higher-than-usual share to validation and testing. With a large dataset, this approach strengthens model comparison, improves tuning, and ensures that final performance metrics are based on a robust and representative holdout set.
+
+To preserve representativeness, the data is split using stratified sampling so that the proportion of individuals earning `≤50K` and `>50K` remain consistent across the training, validation, and test sets.
+
+```{r}
+set.seed(123)
+
+# Initial train/test split.
+
+train_idx <- createDataPartition(income$income_below_num, p = 0.6, list = FALSE)
+
+train <- income[train_idx, ]
+
+temp  <- income[-train_idx, ]
+
+# Split remaining into validation/test.
+
+valid_idx <- createDataPartition(temp$income_below_num, p = 0.5, list = FALSE)
+
+validation <- temp[valid_idx, ]
+
+test <- temp[-valid_idx, ]
+```
+
+Check class balance.
+
+```{r}
+check_balance <- function(df, name) {
+  df %>%
+    count(income_below_num) %>%
+    mutate(prop = round(n / sum(n), 2),
+           dataset = name) %>%
+    select(dataset,
+           income_below_num, 
+           n,
+           prop)
+}
+
+check <- bind_rows(check_balance(train, "Train"),
+                   check_balance(validation, "Validation"),
+                   check_balance(test, "Test"))
+
+kable(check,
+      col.names = c("Dataset", "Income Level", "Count", "Percent"),
+      caption = "Dataset Class Balance",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r", "r"))
+```
+
+# Train Models
+
+## Linear Regression Indicator Matrix Model
+
+We begin by preparing the predictor matrix X, containing numeric representations of age, education, and marital status. The response variable, income, is coded as 0 (≤$50K) or 1 (>$50K). We convert it to a one-hot (indicator) matrix Y for the multivariate linear regression.
+
+```{r}
+# Step 1: Prepare predictor matrix
+X <- as.matrix(train[, c("age_num", "education_num", "marital_status_num")])
+
+# Step 2: Create indicator matrix for binary response
+G <- train$income_num  # Assumed to be 0/1
+Y <- model.matrix(~ factor(G) - 1)  # One-hot encoding
+```
+
+A multivariate linear regression is fit with the one-hot encoded response matrix. This approach models the probability of each class as a linear combination of predictors.
+
+```{r}
+# Step 3: Fit multivariate linear regression
+fit <- lm(Y ~ X)
+```
+
+Using the fitted model, we predict scores for each class. These predicted scores may fall outside the 0–1 range, which highlights the limitation of using linear regression for classification.
+
+```{r}
+# Step 4: Predict class scores
+pred <- predict(fit, newdata = data.frame(X))
+```
+
+For each observation, we assign the class with the highest predicted score. We then recode it back to match the original binary labels (0 or 1).
+
+```{r}
+# Step 5: Assign predicted class (1 or 2)
+class_pred <- max.col(pred)
+
+# Step 6: Recode predicted class to match binary response (0/1)
+class_pred_binary <- ifelse(class_pred == 1, 0, 1)
+```
+
+We evaluate the predicted classes against the true labels using a confusion matrix. Key metrics such as accuracy, sensitivity, specificity, and precision summarize the model’s performance.
+
+```{r}
+# Step 7: Evaluate classification performance
+conf_mat <- caret::confusionMatrix(
+  factor(class_pred_binary),
+  factor(train$income_num)
+)
+
+# Step 8: Print metrics
+conf_mat$overall["Accuracy"]
+conf_mat$byClass[c("Sensitivity", "Specificity", "Precision")]
+```
+
+Although we can produce predicted classes and metrics, the predicted probabilities from a linear model are not constrained to [0,1]. This can result in nonsensical probabilities, motivating the use of logistic regression for binary outcomes.
+
+### Extreme Probabilities
+
+The table below summarizes the number and percentage of predicted probabilities from the linear regression model that fall outside the valid 0–1 range for each class. As expected, linear regression applied to a binary outcome can produce estimates below 0 or above 1, highlighting a limitation of this approach for classification tasks.
+
+First, we extract the predicted probabilities for each class from the linear regression model. These probabilities represent the model’s estimated likelihood that each individual falls into the ≤$50K or >$50K income category.
+
+```{r}
+# Extract columns
+prob_under50k <- pred[, "factor(G)0"]
+prob_over50k  <- pred[, "factor(G)1"]
+```
+
+To assess the appropriateness of linear regression for a binary outcome, we identify predictions that fall outside the valid probability range of 0 to 1. The table below shows the number and percentage of such predictions for each class.
+
+```{r}
+# Count out-of-bounds for each class
+out_under <- sum(prob_under50k < 0 | prob_under50k > 1)
+out_over  <- sum(prob_over50k  < 0 | prob_over50k  > 1)
+total <- nrow(pred)
+
+# Summary table
+data.frame(
+  Class = c("<=50K", ">50K"),
+  Out_of_Bounds = c(out_under, out_over),
+  Total = total,
+  Percent_Out_of_Bounds = round(100 * c(out_under, out_over) / total, 2)
+)
+
+# kable(check,
+#       col.names = c("Dataset", "Income Level", "Count", "Percent"),
+#       caption = "Dataset Class Balance",
+#       format.args = list(big.mark = ","),
+#       align = c("l", "r", "r", "r"))
+```
+
+The plot below illustrates the distribution of predicted probabilities for both income classes. The dashed red lines mark the valid 0–1 probability range. Any predictions beyond these boundaries are not interpretable as probabilities, demonstrating why logistic regression is generally preferred for binary classification problems.
+
+```{r}
+# Convert to long format for ggplot
+df_long <- as.data.frame(pred) %>%
+  pivot_longer(cols = everything(), names_to = "Class", values_to = "Probability")
+
+# Plot
+ggplot(df_long, aes(x = Probability, fill = Class)) +
+  geom_histogram(bins = 50, color = "white", position = "dodge") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(
+    x = "Predicted Probability",
+    y = "Count",
+    title = "Distribution of Linear Regression Predicted Probabilities by Class"
+  ) +
+  scale_fill_manual(values = c("factor(G)0" = "steelblue", "factor(G)1" = "tomato")) +
+  theme_minimal()
+```
+
+Together, these outputs provide a numeric indication and clear visual of the constraints of using linear regression for a categorical outcome, setting the stage for comparison with the logistic regression model.
+
+### Generate ROC Curve and AUC Metric
+
+```{r}
+# Column 2 corresponds to class 1 (income_num == 1)
+score_class1 <- pred[, 2]
+
+roc_obj <- pROC::roc(response = train$income_num, predictor = score_class1)
+
+# Plot ROC curve
+plot(roc_obj, col = "blue", lwd = 2, main = "ROC Curve for Indicator Regression")
+
+# AUC value
+auc_value <- pROC::auc(roc_obj)
+print(auc_value)
+
+```
+
+## Logistic Regression
+
+```{r}
+model_logistic <- glm(income_num ~ 
+                        age_num + 
+                        #workclass_num + 
+                        education_num + 
+                        marital_status_num,
+                        #hours_per_week_num + 
+                        #relationship_num + 
+                        #race_num + 
+                        #gender_num + 
+                        #capital_gain_num + 
+                        #capital_loss_num, 
+                      data = train, family = "binomial")
+```
+
+### Generate Model Summary
+
+```{r}
+summary(model_logistic)
+```
+
+### Generate ROC Curve and AUC Metric
+
+```{r}
+train$predicted_prob <- predict(model_logistic, type = "response")
+
+roc_obj <- pROC::roc(train$income_num, train$predicted_prob)
+
+plot(roc_obj, col = "blue", main = "ROC Curve - Train Model")
+```
+
+```{r}
+pROC::auc(roc_obj)
+```
+
+### Generate Confusion Matrix
+
+
+
+```{r}
+threshold <- 0.5
+
+train$predicted_class <- ifelse(train$predicted_prob > 0.5, 1, 0)
+```
+
+
+
+```{r}
+caret::confusionMatrix(factor(train$predicted_class), factor(train$income_num))
+```
+
+```{r}
+confusion <- table(Predicted = train$predicted_class,
+                   Actual = train$income_num)
+
+TP <- confusion[2, 2]
+FP <- confusion[2, 1]
+FN <- confusion[1, 2]
+TN <- confusion[1, 1]
+
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+accuracy <- (TP + TN) / sum(confusion)
+
+list(confusion = confusion,
+     sensitivity = round(sensitivity, 2),
+     specificity = round(specificity, 2),
+     accuracy = round(accuracy, 2))
+```
+
+# Compare Models
+
+## Training Data
+
+## Validation Data
+
+# Choose Final Model
+
+# Retrain Final Model
+
+# Evaluate Model
+
+# Final Analysis
+
+## Conclusions
+
+## Challenges and Solutions
+
+# Appendices
+
+## Appendix A: Exploratory Data Analysis
+
+### Age (age_num)
+
+
+
+```{r}
+age <- income %>%
+  group_by(age_num) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(age,
+      col.names = c("Age", "Entries", "Percent"),
+      caption = "Age (age_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+```{r}
+ggplot(age, aes(x = age_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Age (age_num)",
+       x = "Age (age_num)",
+       y = "Entries") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(age$entries) * 1.2)
+```
+
+### Workclass (workclass_cat, workclass_num)
+
+
+
+```{r}
+workclass <- income %>%
+  group_by(workclass_cat) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(workclass,
+      col.names = c("Workclass", "Entries", "Percent"),
+      caption = "Workclass (workclass_cat, workclass_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+```{r}
+ggplot(workclass, aes(x = forcats::fct_reorder(workclass_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Workclass (workclass_cat, workclass_num)",
+       x = "Workclass",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(workclass$entries) * 1.2)
+```
+
+
+
+### Education (education_cat, education_num)
+
+
+
+```{r}
+education <- income %>%
+  group_by(education_num, education_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  arrange(education_num) %>%
+  mutate(percent = round(entries / sum(entries), 2),
+         education_cat = factor(education_cat, levels = unique(education_cat)))
+
+
+kable(education,
+      col.names = c("Education Number", "Education Category", "Entries", "Percent"),
+      caption = "Education (education_cat, education_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+```{r}
+ggplot(education, aes(x = education_cat, y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Workclass (workclass_cat, workclass_num)",
+       x = "Workclass",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(education$entries) * 1.2)
+```
+
+### Years of Education (years_of_education_num)
+
+
+
+```{r}
+years_of_education <- income %>%
+  group_by(years_of_education_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(years_of_education,
+      col.names = c("Years of Education", "Entries", "Percent"),
+      caption = "Years of Education (years_of_education_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(years_of_education, aes(x = years_of_education_num, y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Years of Education (years_of_education)",
+       x = "Years of Education",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(years_of_education$entries) * 1.2)
+```
+
+### Marital Status (marital_status_cat, marital_status_num)
+
+
+
+```{r}
+marital_status <- income %>%
+  group_by(marital_status_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(marital_status,
+      col.names = c("Marital Status", "Entries", "Percent"),
+      caption = "Marital Status (marital_status_cat, marital_status_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+```{r}
+ggplot(marital_status, aes(x = forcats::fct_reorder(marital_status_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Marital Status (marital_status_cat, marital_status_num)",
+       x = "Marital Status",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(marital_status$entries) * 1.2)
+```
+
+
+### Occupation (occupation_cat, occupation_num)
+
+
+
+```{r}
+occupation <- income %>%
+  group_by(occupation_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(occupation,
+      col.names = c("Occupation", "Entries", "Percent"),
+      caption = "Occupation (occupation_cat, occupation_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+```{r}
+ggplot(occupation, aes(x = forcats::fct_reorder(occupation_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Occupation (occupation_cat, occupation_num)",
+       x = "Occupation",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(occupation$entries) * 1.2)
+```
+
+### Hours Per Week (hours_per_week_num)
+
+
+
+```{r}
+hours_per_week <- income %>%
+  group_by(hours_per_week_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(hours_per_week,
+      col.names = c("Hours Per Week", "Entries", "Percent"),
+      caption = "Hours Per Week (hours_per_week_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(hours_per_week, aes(x = hours_per_week_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Hours Per Week (hours_per_week_num)",
+       x = "Hours Per Week",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(hours_per_week$entries) * 1.2)
+```
+
+### Relationship (relationship_cat, relationship_num)
+
+
+
+```{r}
+relationship <- income %>%
+  group_by(relationship_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(relationship,
+      col.names = c("Relationship", "Entries", "Percent"),
+      caption = "Relationship (relationship_cat, relationship_num)",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(relationship, aes(x = forcats::fct_reorder(relationship_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Relationship (relationship_cat, relationship_num)",
+       x = "Relationship",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(relationship$entries) * 1.2)
+```
+
+### Race
+
+
+
+```{r}
+race <- income %>%
+  group_by(race_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(race,
+      col.names = c("Race", "Entries", "Percent"),
+      caption = "Race",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(race, aes(x = forcats::fct_reorder(race_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Race",
+       x = "Race",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(race$entries) * 1.2)
+```
+
+### Gender
+
+
+
+```{r}
+gender <- income %>%
+  group_by(gender_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(gender,
+      col.names = c("Gender", "Entries", "Percent"),
+      caption = "Gender",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(gender, aes(x = forcats::fct_reorder(gender_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Gender",
+       x = "Gender",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(gender$entries) * 1.2)
+```
+
+### Capital Gain
+
+
+
+```{r}
+capital_gain <- income %>%
+  group_by(capital_gain_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(capital_gain,
+      col.names = c("Capital Gain", "Entries", "Percent"),
+      caption = "Capital Gain",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(capital_gain, aes(x = capital_gain_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Capital Gain",
+       x = "Capital Gain",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(capital_gain$entries) * 1.2)
+```
+
+### Capital Loss
+
+
+
+```{r}
+capital_loss <- income %>%
+  group_by(capital_loss_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(capital_loss,
+      col.names = c("Capital Loss", "Entries", "Percent"),
+      caption = "Capital Loss",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+```{r}
+ggplot(capital_loss, aes(x = capital_loss_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Capital Loss",
+       x = "Capital Loss",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(capital_loss$entries) * 1.2)
+```
+
+
+
+You're looking at a cumulative distribution function (CDF) of capital loss, which tells you the proportion of individuals whose capital loss is less than or equal to a given value. Here's how to interpret the key features:
+
+X-axis (Capital Loss): The dollar amount of capital loss.
+
+Y-axis (Cumulative Proportion): The proportion of individuals with capital loss ≤ that amount.
+
+```{r}
+capital_loss %>%
+  arrange(capital_loss_num) %>%
+  mutate(cumulative = cumsum(entries) / sum(entries)) %>%
+  ggplot(aes(x = capital_loss_num, y = cumulative)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Cumulative Distribution of Capital Loss",
+       x = "Capital Loss",
+       y = "Cumulative Proportion") +
+  theme_minimal()
+
+```
+
+Starts near 0.96: About 96% of individuals have zero capital loss.
+
+Steep rise between ~1000 and ~2500: This is where most of the non-zero capital losses occur. The curve climbs quickly here, meaning a lot of the remaining 4% fall in this range.
+
+Flattens after ~3000: Very few individuals have capital losses above this threshold. The curve approaching 1.00 means you've essentially captured the entire population by this point.
+
+You might also treat it as a binary indicator (zero vs. non-zero) if the actual dollar amount isn’t predictive.
+
+For fairness or interpretability, you could explore whether high capital losses correlate with other variables like income or age — but only for the small subset that experiences them.
+
+### Native Country
+
+
+
+```{r}
+native_country <- income %>%
+  group_by(native_country_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+
+kable(native_country,
+      col.names = c("Native Country", "Entries", "Percent"),
+      caption = "Native Country",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+
+
+
+
+
+
+```{r}
+# Dataset 1: US vs. All Others
+native_country_us_vs_other <- native_country %>%
+  mutate(group = ifelse(native_country_cat == "United-States", "United States", "Other")) %>%
+  group_by(group) %>%
+  summarise(entries = sum(entries), percent = sum(percent)) %>%
+  ungroup()
+
+# Dataset 2: All countries excluding US
+native_country_non_us <- native_country %>%
+  filter(native_country_cat != "United-States")
+
+```
+
+```{r}
+ggplot(native_country_us_vs_other, aes(x = forcats::fct_reorder(group, percent, .desc = TRUE), y = percent)) +
+  geom_col(fill = c("steelblue")) +
+  geom_text(aes(label = paste0(round(percent * 100, 1), "%")),
+            vjust = -0.3, size = 4.0) +
+  labs(title = "Native Country: United States vs. All Others",
+       x = NULL, y = "Percentage") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  expand_limits(y = max(native_country_us_vs_other$percent) * 1.2)
+
+```
+
+
+
+```{r}
+native_country_grouped <- native_country %>%
+  filter(native_country_cat != "United-States") %>%
+  mutate(native_country_grouped = ifelse(percent < 0.01, "Other (<1%)", native_country_cat)) %>%
+  group_by(native_country_grouped) %>%
+  summarise(entries = sum(entries), percent = sum(percent)) %>%
+  ungroup()
+
+```
+
+```{r}
+ggplot(native_country_grouped, aes(y = forcats::fct_reorder(native_country_grouped, percent), x = percent)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = paste0(round(percent * 100, 1), "%")),
+            hjust = -0.1, size = 3.0) +
+  labs(title = "Native Country: All Non-US (Grouped <1%)",
+       x = "Percentage", y = "Native Country") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold")) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  expand_limits(x = max(native_country_grouped$percent) * 1.1)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

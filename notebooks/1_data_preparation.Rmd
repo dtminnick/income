@@ -1,0 +1,955 @@
+---
+title: "Income Classification Using Logistic Regression: Data Preparation"
+author: "Donnie Minnick"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+# Objective
+
+This project analyzes income prediction using logistic regression on the UCI Adult 
+Income dataset. It explores the impact of class imbalance, feature selection, 
+and decision threshold tuning to build interpretable and balanced classification 
+models.
+
+# Source Dataset
+
+The Adult Income dataset originates from the 1994 U.S. Census database. It was 
+created to predict whether an individual earns more than $50,000 per year based 
+on demographic and employment-related attributes.
+
+This is a binary classification dataset commonly used for logistic regression, 
+decision trees, and fairness analysis.
+
+It was created by Ronny Kohavi and Barry Becker, from the Census Bureau's 1994 
+Current Population Survey (CPS).
+
+It is hosted by the UCI Machine Learning Repository [here](https://archive.ics.uci.edu/ml/datasets/adult).
+
+Load libraries.
+
+```{r, message = FALSE}
+library("dplyr")
+library("ggplot2")
+library("knitr")
+```
+
+# Load Raw Data
+
+```{r}
+adult_income_clean <- readRDS("../data/raw/adult_income_raw.rds")
+
+str(adult_income_clean)
+```
+
+Data frame contains 32,560 observations and 15 variables.
+
+# Variable Definitions
+
+| Variable       | Type        | Description |
+| -------------- | ----------- | ----------- |
+| age	           | Numeric     | Age of the individual in years. |
+| workclass   	 | Categorical | Type of employer or employment sector (e.g., Private, Self-emp, Gov). |
+| fnlwgt         | Numeric     | Final person weight: how many people the respondent represents in the survey. |
+| education   	 | Categorical | Highest level of education completed (e.g., Bachelors, HS-grad). |
+| education_num  | Numeric     | Numeric representation of education (ordinal scale from 1–16). |
+| marital_status | Categorical | Marital status (e.g., Married-civ-spouse, Divorced, Never-married). |
+| occupation	   | Categorical | Kind of work performed by the individual (e.g., Exec-managerial, Sales). |
+| relationship   | Categorical | Person’s household role (e.g., Husband, Wife, Own-child). |
+| race           | Categorical | Race classification per Census (e.g., White, Black, Asian-Pac-Islander). |
+| sex            | Categorical | Biological sex of the respondent (Male, Female). |
+| capital_gain   | Numeric     | Profit from sale of capital assets (e.g., stocks, real estate). |
+| capital_loss   | Numeric     | Loss from sale of capital assets. |
+| hours_per_week | Numeric     | Number of hours the person works per week. |
+| native_country | Categorical | Country of birth (respondent is currently living in the U.S.). |
+| income         | Categorical | Target variable: whether income is <=50K or >50K per year. |
+
+# Handle Missing Values
+
+Trim extra white space from values and omit records that contain missing values.  
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(across(where(is.character), ~ stringr::str_trim(.))) %>%
+  tidyr::drop_na()
+```
+
+Record count reduced to 30,161 observations.
+
+# Review and Encode Variables
+
+## Age
+
+Age of individual in years.
+
+```{r}
+entries_by_age <- adult_income_clean %>%
+  group_by(age) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_age,
+      col.names = c("Age", "Entries", "Percent"),
+      caption = "Entries By Age",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Ages range from 17 to 90.  Plot age.
+
+```{r}
+ggplot(adult_income_clean, aes(x = age)) +
+  geom_histogram(binwidth = 5, fill = "lightsteelblue", color = "white") +
+  labs(title = "Distribution of Age", x = "Age", y = "Count") +
+  theme_minimal()
+```
+
+Most observations fall in the 25-50 age range, and there is a long tail extending into older ages, especially past age 60, but these are rare.  There a very few individuals over age 70, and the count drops steeply after age 55.
+
+The peak aligns with prime working years.  The sparse representation for very young and very old individuals is likely due to school enrollment and retirement.
+
+What is the trend between age and income?
+
+Plot age versus income.
+
+```{r}
+ggplot(adult_income_clean, aes(x = age, fill = income)) +
+  geom_histogram(binwidth = 5, position = "dodge", color = "white") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "slateblue4")) +
+  labs(title = "Income vs. Age", x = "Age", y = "Count", fill = "Income") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 11),
+        legend.position = "top")
+```
+
+There are diverging age-income distributions here.
+
+The `<=50k` group is dominant in younger ages (20-40) and steadily declines with age.  The reflects early-career positions, part-time workers and students, and perhaps structural wage inequality by sex, race, or education.
+
+The `>50k` group is barely present until around ages 28-30, grows and peaks between ages 35-50, then declines.  This reflects mid-career professionals, and the effects of education, experience and seniority.  The income plateau for this group is near peak career age.
+
+Both groups decline in a manner that mirrors general workforce retirement patterns.
+
+Age does not appear to be linearly related to income.  There's a threshold effect, i.e. higher income doesn't gradually rise from age 18 onward.  It ramps sharply post-age 30.
+
+And income inequality is dynamic by age, i.e. the `>50k` group becomes more dominant only after career experience accumulates.
+
+## Workclass
+
+Represents the type of employer or employment sector.
+
+```{r}
+entries_by_workclass <- adult_income_clean %>%
+  group_by(workclass) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_workclass,
+      col.names = c("Workclass", "Entries", "Percent"),
+      caption = "Entries By Workclass",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot workclass.
+
+```{r}
+ggplot(entries_by_workclass, aes(x = forcats::fct_reorder(workclass, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Workclass",
+       x = "Workclass",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Consolidate from 7 groups to 4 to reduce model complexity and align with more meaningful labor categories.
+
+* **Public**: Federal, state or local goverment,
+* **Private**: Most traditional employers, 
+* **Self-Employed**: Entrepreneurs and contractors, and
+* **Not Employed**: No income.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(workclass_group = case_when(
+    workclass %in% c("Federal-gov", "Local-gov", "State-gov") ~ "Public",
+    workclass == "Private" ~ "Private",
+    workclass %in% c("Self-emp-inc", "Self-emp-not-inc") ~ "Self-Employed",
+    workclass == "Without-pay" ~ "Not Employed",
+    TRUE ~ NA_character_))
+
+entries_by_workclass_group <- adult_income_clean %>%
+  group_by(workclass_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_workclass_group,
+      col.names = c("Workclass Group", "Entries", "Percent"),
+      caption = "Entries By Workclass Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot workclass groups.
+
+```{r}
+ggplot(entries_by_workclass_group, aes(x = forcats::fct_reorder(workclass_group, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Workclass",
+       x = "Workclass",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Final Weight
+
+Final weight is a person-level sampling weight provided by the US Census Bureau to indicate how many people in the overall population the sampled individual represents.
+
+It exists because the Census Bureau uses stratified sampling and not every individual had an equal chance of being selected. So each respondent was assigned a weight to adjust for over- or under-sampling in demographic groups and populatiuon representation by region, age, race, gender, etc.
+
+If someone has a `fnlwgt` of 148780, it means that person represents 148,780 people in the full population.
+
+I don't need to adjust for survey design, so I will exclude the variable.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  select(-fnlwgt)
+```
+
+## Education
+
+Highest level of education completed (e.g., Bachelors, HS-grad).
+
+```{r}
+entries_by_education <- adult_income_clean %>%
+  group_by(education) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2)) %>%
+  mutate(education = factor(education,
+                            levels = c("Preschool",
+                                       "1st-4th", 
+                                       "5th-6th", 
+                                       "7th-8th", 
+                                       "9th", 
+                                       "10th", 
+                                       "11th",
+                                       "12th",
+                                       "HS-grad",
+                                       "Some-college",
+                                       "Assoc-voc",
+                                       "Assoc-acdm",
+                                       "Bachelors",
+                                       "Masters",
+                                       "Prof-school",
+                                       "Doctorate")))
+
+kable(entries_by_education,
+      col.names = c("Education", "Entries", "Percent"),
+      caption = "Entries By Education",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot education.
+
+```{r}
+ggplot(entries_by_education, aes(x = education, y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Education",
+       x = "Education",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Consolidate the 16 groups into a smaller set of 7 more meaningful categories.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(education_group = case_when(
+    education %in% c("Preschool", "1st-4th", "5th-6th", "7th-8th",
+                     "9th", "10th", "11th", "12th") ~ "Less than HS",
+    education == "HS-grad" ~ "High School Grad",
+    education == "Some-college" ~ "Some College",
+    education %in% c("Assoc-acdm", "Assoc-voc") ~ "Associate Degree",
+    education == "Bachelors" ~ "Bachelor's",
+    education %in% c("Masters", "Doctorate", "Prof-school") ~ "Graduate Degree",
+    TRUE ~ NA_character_))
+
+entries_by_education_group <- adult_income_clean %>%
+  group_by(education_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2)) %>%
+  mutate(education_group = factor(education_group,
+                                  levels = c("Less than HS", 
+                                             "High School Grad", 
+                                             "Some College", 
+                                             "Associate Degree", 
+                                             "Bachelor's", 
+                                             "Graduate Degree")))
+
+kable(entries_by_education_group,
+      col.names = c("Education Group", "Entries", "Percent"),
+      caption = "Entries By Education Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot education group.
+
+```{r}
+ggplot(entries_by_education_group, aes(x = education_group, y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Education Group",
+       x = "Education Group",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Create a binary variable that indicates whether an individual has a college degree or not.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(has_college_degree = ifelse(education_group %in% c("Bachelor's", "Graduate Degree"), 1, 0))
+```
+
+## Education Number
+
+Numeric representation of education (ordinal scale from 1–16).
+
+```{r}
+entries_by_education_num <- adult_income_clean %>%
+  group_by(education_num) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_education_num,
+      col.names = c("Education Number", "Entries", "Percent"),
+      caption = "Entries By Education Number",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot education number.
+
+```{r}
+ggplot(entries_by_education_num, aes(x = education_num, y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Education Number",
+       x = "Education Number",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Since I'm using education group as a factor, and education number is simply numeric proxy for the same information, including both in the model will lead to multicollinearity or confounding. 
+
+Drop the education number column and use the education group column for clear odds comparison.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  select(-education_num)
+```
+
+## Marital Status
+
+Indicates individual's marital status.
+
+```{r}
+entries_by_marital_status <- adult_income_clean %>%
+  group_by(marital_status) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_marital_status,
+      col.names = c("Marital Status", "Entries", "Percent"),
+      caption = "Entries By Marital Status",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot marital status.
+
+```{r}
+ggplot(entries_by_marital_status, aes(x = forcats::fct_reorder(marital_status, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Marital Status",
+       x = "Marital Status",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Reduce 7 marital_status levels into a few semantically and analytically meaningful categories.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(marital_status_group = case_when(
+    marital_status %in% c("Married-civ-spouse", "Married-AF-spouse") ~ "Married",
+    marital_status == "Never-married" ~ "Never Married",
+    marital_status %in% c("Divorced", "Separated", "Widowed", "Married-spouse-absent") ~ "Previously Married",
+    TRUE ~ NA_character_))
+
+entries_by_marital_status_group <- adult_income_clean %>%
+  group_by(marital_status_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_marital_status_group,
+      col.names = c("Marital Status Group", "Entries", "Percent"),
+      caption = "Entries By Marital Status Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot marital status group.
+
+```{r}
+ggplot(entries_by_marital_status_group, aes(x = forcats::fct_reorder(marital_status_group, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Marital Status Group",
+       x = "Marital Status Group",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Create a binary variable that indicates whether an individual is married or not.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(is_married = ifelse(marital_status_group == "Married", 1, 0))
+```
+
+## Occupation
+
+Kind of work performed by the individual.
+
+```{r}
+entries_by_occupation <- adult_income_clean %>%
+  group_by(occupation) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_occupation,
+      col.names = c("Occupation", "Entries", "Percent"),
+      caption = "Entries By occupation",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot occupations.
+
+```{r}
+ggplot(entries_by_occupation, aes(x = forcats::fct_reorder(occupation, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Occupation",
+       x = "Occupation",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Group the detailed occupation values into broader, interpretable job sector categories to stabilize the model and improve interpretability.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(occupation_group = case_when(
+    occupation %in% c("Exec-managerial", "Prof-specialty", "Tech-support", "Sales") ~ "White-Collar",
+    occupation %in% c("Craft-repair", "Machine-op-inspct", "Transport-moving", "Handlers-cleaners",
+                      "Farming-fishing", "Priv-house-serv", "Protective-serv") ~ "Blue-Collar",
+    occupation %in% c("Adm-clerical", "Other-service") ~ "Service",
+    occupation %in% c("Armed-Forces", "?") ~ "Unemployed/Other",
+    TRUE ~ NA_character_))
+
+entries_by_occupation_group <- adult_income_clean %>%
+  group_by(occupation_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_occupation_group,
+      col.names = c("Occupation Group", "Entries", "Percent"),
+      caption = "Entries By Occupation Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot occupation group.
+
+```{r}
+ggplot(entries_by_occupation_group, aes(x = forcats::fct_reorder(occupation_group, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Occupation Group",
+       x = "Occupation",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Create a binary variable indicating whether an individual has a white-collar occupation or not.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(is_white_collar = ifelse(occupation_group == "White-Collar", 1, 0))
+```
+
+## Relationship
+
+The relationship column in the Adult Income dataset represents the individual’s role within their household, based on how they relate to the person who filled out the Census form.  It describes the respondent's family role or household position. It's not about romantic relationships per se, but rather household structure.
+
+```{r}
+entries_by_relationship <- adult_income_clean %>%
+  group_by(relationship) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_relationship,
+      col.names = c("Relationship", "Entries", "Percent"),
+      caption = "Entries By Relationship",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot relationship.
+
+```{r}
+ggplot(entries_by_relationship, aes(x = forcats::fct_reorder(relationship, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Relationship",
+       x = "Relationship",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Here's a common, modeling-friendly grouping.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(relationship_group = case_when(
+    relationship %in% c("Husband", "Wife") ~ "Head or Spouse",
+    relationship == "Own-child" ~ "Child",
+    relationship == "Other-relative" ~ "Extended Family",
+    relationship %in% c("Not-in-family", "Unmarried") ~ "Unrelated",
+    TRUE ~ NA_character_))
+
+entries_by_relationship_group <- adult_income_clean %>%
+  group_by(relationship_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_relationship_group,
+      col.names = c("Relationship Group", "Entries", "Percent"),
+      caption = "Entries By Relationship Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot relationship group.
+
+```{r}
+ggplot(entries_by_relationship_group, aes(x = forcats::fct_reorder(relationship_group, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Relationship Group",
+       x = "Relationship Group",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Race
+
+Race classification per census data.
+
+```{r}
+entries_by_race <- adult_income_clean %>%
+  group_by(race) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_race,
+      col.names = c("Race", "Entries", "Percent"),
+      caption = "Entries By Race",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot race.
+
+```{r}
+ggplot(entries_by_race, aes(x = forcats::fct_reorder(race, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Race",
+       x = "Race",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Sex
+
+Biological sex of the individual.
+
+```{r}
+entries_by_sex <- adult_income_clean %>%
+  group_by(sex) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_sex,
+      col.names = c("Sex", "Entries", "Percent"),
+      caption = "Entries By Sex",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot sex.
+
+```{r}
+ggplot(entries_by_sex, aes(x = forcats::fct_reorder(sex, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Sex",
+       x = "Sex",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Are females sufficiently represented here?  How does this compare to the US population as a whole?
+
+According to U.S. Census Bureau estimates for the 1994–1995 period (which aligns with the dataset's timeframe), the actual U.S. adult population was approximately 50–51% female and 49–50% male. So yes — women are underrepresented in this dataset by about 18–19 percentage points.
+
+Why would this be the case?
+
+Employment-focused sampling: The dataset is built from the Census Bureau’s Current Population Survey (CPS) — specifically tailored for labor market studies. Women were less likely to be in full-time or high-wage employment in the 1990s, which might have affected inclusion.
+
+Income filter bias: If the dataset emphasizes workers with reported income, many part-time or unpaid caregivers (disproportionately women) might be excluded.
+
+Historical gender roles: In 1994–1995, the labor force participation rate for women was about 58%, compared to 75%+ for men — this drives skewed representation in income-based surveys.
+
+Impact of this?
+
+If the model learns patterns that favor male-majority patterns, it may underfit or misclassify women or reinforce bias if deployed in real decision-making.
+
+What do I do about this?
+
+Check for model performance disparities and/or consider weighting or rebalancing to match the real-world gender population.
+
+Create binary variable indicating whether an individual is a male or not.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(is_male = ifelse(sex == "Male", 1, 0))
+```
+
+## Capital Gain and Capital Loss
+
+These fields represent the profit or loss from the same of capital assets in the past year. They are reported in US dollars and apply to as very small subset of the population.
+
+```{r}
+entries_by_capital_assets <- adult_income_clean %>%
+  mutate(has_capital_gain = if_else(capital_gain > 0, 1, 0),
+         has_capital_loss = if_else(capital_loss > 0, 1, 0)) %>%
+  group_by(has_capital_gain, has_capital_loss) %>%
+  summarise(entries = n())
+
+kable(entries_by_capital_assets,
+      col.names = c("Has Capital Gain", "Has Capital Loss", "Entries"),
+      caption = "Entries By Capital Assets",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot capital asset occurrences.
+
+```{r}
+ggplot(entries_by_capital_assets, aes(x = factor(has_capital_gain), 
+                                      y = entries, 
+                                      fill = factor(has_capital_loss))) +
+  geom_col(position = "dodge", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, hjust = "center", size = 3.5) +
+  labs(title = "Distribution of Capital Asset Types",
+       x = "Has Capital Gain",
+       y = "Count",
+       fill = "Has Capital Loss") +
+  scale_fill_manual(values = c("0" = "lightsteelblue", "1" = "slateblue4")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+26,197 people have no gain or loss reported, and 3,964 reported either a gain or a loss.
+
+The best approach here is to convert the columns to binary flags, which will simplify the model to asking, "Did this person have a gain or loss?" This also avoids the effects of extreme values.
+
+Add the binary columns.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(has_capital_gain = if_else(capital_gain > 0, 1, 0),
+         has_capital_loss = if_else(capital_loss > 0, 1, 0))
+```
+
+## Hours Per Week
+
+Number of hours the person works per week. 
+
+More hours equals higher likelihood of full-time employment, and thereby higher income.  May be especially meaningful near thresholds like 35–40 hours (full-time vs. part-time).
+
+Also helps differentiate between low-wage full-time and high-wage part-time work.
+
+Its impact can varies by sex, occupation, and education.  For example, a woman working 60 hours per week in tech may earn more than a man working 30 hours per week in clerical.
+
+Plot hours per week.
+
+```{r}
+ggplot(adult_income_clean, aes(x = hours_per_week, fill = income)) +
+  geom_histogram(binwidth = 5, position = "dodge") +
+  labs(title = "Income vs. Hours Worked per Week") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "slateblue4")) +
+  labs(title = "Income vs. Age", x = "Age", y = "Count", fill = "Income") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 11),
+        legend.position = "top")
+```
+
+There is a strong peak at 40 hours per week; this is expected since 40 hours is the standard for full-time work in the US.  It dominates both groups but especially the `<=50k` group.
+
+Beyond 40 hours per week, the proportion of higher earners increases, suggesting that working longer hours is correlated with higher income.  Lower hours lean toward `<=50k` and those working under 35 hours per week are much more likely to be in this group.  This could reflect part-time gigs or under-employment situations.
+
+Will keep the variable; it's obviously informative.
+
+Will create a categorical version by binning the values then check the proportions by group.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(hours_group = case_when(hours_per_week < 20 ~ "Under 20",
+                                 hours_per_week < 35 ~ "Part-time",
+                                 hours_per_week < 45 ~ "Full-time",
+                                 hours_per_week < 60 ~ "Overtime",
+                                 TRUE ~ "Extreme"))
+
+entries_by_hours_group <- adult_income_clean %>%
+  group_by(hours_group) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2)) %>%
+  mutate(hours_group = factor(hours_group,
+                              levels = c("Under 20", 
+                                         "Part-time", 
+                                         "Full-time", 
+                                         "Overtime", 
+                                         "Extreme")))
+
+kable(entries_by_hours_group,
+      col.names = c("Hours Group", "Entries", "Percent"),
+      caption = "Entries By Hours Group",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot hours groups.
+
+```{r}
+ggplot(entries_by_hours_group, aes(x = hours_group, y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Hours Group",
+       x = "Hours Group",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+Create binary variable to indicate whether a person works full-time or not.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(works_full_time = ifelse(hours_group %in% c("Full-time", "Overtime"), 1, 0))
+```
+
+## Native Country
+
+The country where the respondent was born (not necessarily their citizenship).  All individuals in the dataset are living in the U.S. at the time of the survey.
+
+Some are likely naturalized U.S. citizens, others are permanent residents, temporary workers, or possibly undocumented (though CPS doesn’t explicitly categorize that).
+
+This variable often proxies for immigrant status, which correlates with income, education, language fluency, and occupational access.
+
+It’s especially relevant when modeling income, because language and cultural barriers may impact earning potential, some immigrant groups may face systemic labor market disadvantages or advantages.  However, it does not distinguish between naturalized vs. non-citizens.
+
+```{r}
+entries_by_native_country <- adult_income_clean %>%
+  group_by(native_country) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_native_country,
+      col.names = c("Native Country", "Entries", "Percent"),
+      caption = "Entries By Native Country",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot native countries.
+
+```{r}
+ggplot(entries_by_native_country, aes(x = forcats::fct_reorder(native_country, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Native Country",
+       x = "Native Country",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Group countries into regional economic categories.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(native_region = case_when(
+    native_country == "United-States" ~ "United States",
+    native_country %in% c("Mexico", "El-Salvador", "Guatemala", "Honduras", "Nicaragua", "Columbia", 
+                          "Ecuador", "Peru", "Cuba", "Puerto-Rico", "Dominican-Republic", 
+                          "Trinadad&Tobago", "Jamaica", "Haiti") ~ "Latin America",
+    native_country %in% c("China", "India", "Japan", "Vietnam", "Philippines", "Iran", 
+                          "Taiwan", "Thailand", "Cambodia", "Hong", "Laos") ~ "Asia",
+    native_country %in% c("England", "France", "Germany", "Greece", "Hungary", "Ireland", 
+                          "Italy", "Poland", "Portugal", "Scotland", "Yugoslavia", "Holand-Netherlands") ~ "Europe",
+    native_country == "Canada" ~ "Canada",
+    TRUE ~ "Other"))
+
+entries_by_native_region <- adult_income_clean %>%
+  group_by(native_region) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_native_region,
+      col.names = c("Native Region", "Entries", "Percent"),
+      caption = "Entries By Native Region",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot native regions.
+
+```{r}
+ggplot(entries_by_native_region, aes(x = forcats::fct_reorder(native_region, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Native Region",
+       x = "Native Region",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Income
+
+The target variable, whether income is <=50K or >50K per year.
+
+```{r}
+entries_by_income <- adult_income_clean %>%
+  group_by(income) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+kable(entries_by_income,
+      col.names = c("Income", "Entries", "Percent"),
+      caption = "Entries By Income",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+Plot income.
+
+```{r}
+ggplot(entries_by_income, aes(x = income, y = entries)) +
+  geom_col(fill = "lightsteelblue", color = "white") +
+  geom_text(aes(label = entries), vjust = -0.3, size = 3.5) +
+  labs(title = "Distribution of Income",
+       x = "Income",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+There's a class imbalance here, i.e. a three-to-one imbalance between the two groups, which is perhaps expected.  But what does this mean for this model?
+
+The distribution makes sense.  The data reflects 1994-1995 US income and, adjusted for inflation, $50k then is approximately $100k today.  It is also important to note that CPS oversamples lower-income households for poverty and economic policy research.
+
+A naive model could predict that everyone earns less than $50k and still be 75% accurate; we don't learn anything useful from this.  High accuracy doesn't mean high model quality when the classes are imbalanced.
+
+Logistic regression estimates the probability of the positive class `>50k` and with fewer examples of high earners, the model may under-predict the probability of `<50k` because of the bias toward the majority class.
+
+If we look at just overall accuracy, we'll miss how the model performs for each class.  We need to use class-sensitive metrics to confirm how good the model is at identifying high earners as well as majority class members.
+
+Create a binary version of income.
+
+```{r}
+adult_income_clean <- adult_income_clean %>%
+  mutate(income_binary = ifelse(income == ">50K", 1, 0))
+```
+
+# Save Datasets
+
+The final dataset includes 28 variables, which includes grouped and binary variables I engineered for purposes of model testing and comparison.
+
+```{r}
+saveRDS(adult_income_clean, "../data/processed/adult_income_clean.rds")
+```
+
+Create training and test sets with a 70/30 random split.
+
+```{r}
+set.seed(91210)
+
+trainIndex <- caret::createDataPartition(adult_income_clean$income_binary, p = 0.7, list = FALSE)
+
+adult_income_train <- adult_income_clean[trainIndex, ]
+
+adult_income_test <- adult_income_clean[-trainIndex, ]
+
+saveRDS(adult_income_train, "../data/processed/adult_income_train.rds")
+
+saveRDS(adult_income_test, "../data/processed/adult_income_test.rds")
+```

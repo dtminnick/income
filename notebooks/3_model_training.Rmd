@@ -1,0 +1,630 @@
+---
+title: "Income Classification Using Logistic Regression: Model Training"
+author: "Donnie Minnick"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+
+
+Load libraries.
+
+```{r, message = FALSE}
+library("dplyr")
+library("pROC")
+library("PRROC")
+library("ggplot2")
+
+source("../scripts/evaluate_model.R")
+```
+
+# Load Training and Test Data
+
+Load training data frame.
+
+```{r}
+adult_income_train <- readRDS("../data/processed/adult_income_train.rds")
+
+adult_income_test <- readRDS("../data/processed/adult_income_test.rds")
+
+model_results <- data.frame()
+```
+
+# Full Model Variable Selection
+
+Select variables for full model for both training and test.
+
+```{r}
+adult_income_train_full <- adult_income_train %>%
+  select(income_binary,
+         age,
+         workclass_group,
+         education_group,
+         marital_status_group,
+         occupation_group,
+         relationship_group,
+         race,
+         sex,
+         has_capital_gain,
+         has_capital_loss,
+         hours_group,
+         native_region) %>%
+  mutate(workclass_group = as.factor(workclass_group),
+         education_group = as.factor(education_group),
+         marital_status_group = as.factor(marital_status_group),
+         occupation_group = as.factor(occupation_group),
+         relationship_group = as.factor(relationship_group),
+         race = as.factor(race),
+         sex = as.factor(sex),
+         has_capital_gain,
+         has_capital_loss,
+         hours_group = as.factor(hours_group),
+         native_region = as.factor(native_region))
+
+adult_income_test_full <- adult_income_test %>%
+  select(income_binary,
+         age,
+         workclass_group,
+         education_group,
+         marital_status_group,
+         occupation_group,
+         relationship_group,
+         race,
+         sex,
+         has_capital_gain,
+         has_capital_loss,
+         hours_group,
+         native_region) %>%
+  mutate(workclass_group = as.factor(workclass_group),
+         education_group = as.factor(education_group),
+         marital_status_group = as.factor(marital_status_group),
+         occupation_group = as.factor(occupation_group),
+         relationship_group = as.factor(relationship_group),
+         race = as.factor(race),
+         sex = as.factor(sex),
+         has_capital_gain,
+         has_capital_loss,
+         hours_group = as.factor(hours_group),
+         native_region = as.factor(native_region))
+```
+
+# Simplified Model Variable Selection
+
+Select variables for simplified model for both training and test.
+
+```{r}
+adult_income_train_simple <- adult_income_train %>%
+  select(income_binary,
+         age,
+         has_college_degree,
+         is_married,
+         works_full_time,
+         is_white_collar,
+         has_capital_gain,
+         has_capital_loss,
+         is_male)
+
+adult_income_test_simple <- adult_income_test %>%
+  select(income_binary,
+         age,
+         has_college_degree,
+         is_married,
+         works_full_time,
+         is_white_collar,
+         has_capital_gain,
+         has_capital_loss,
+         is_male)
+```
+
+# Run Full Baseline Model
+
+Run the full model to establish a baseline level of performance and capture evaluation data.
+
+```{r}
+model_full <- glm(income_binary ~ age + workclass_group + education_group + marital_status_group +
+                           occupation_group + relationship_group + race + sex + has_capital_gain + 
+                           has_capital_loss + hours_group + native_region,
+                           data = adult_income_train_full, family = "binomial")
+
+model_results <- model_results %>%
+  rbind(evaluate_model(model_full, 
+                       adult_income_test_full, 
+                       threshold = 0.5, 
+                       positive_class = "1", 
+                       model_name = "Full (0.5)"))
+
+summary(model_full)
+```
+
+# Run Simplified Model
+
+Run simplified model and capture evaluation data.
+
+```{r}
+model_simple <- glm(income_binary ~ age + has_college_degree + is_married + works_full_time + 
+                    is_white_collar + has_capital_gain + has_capital_loss + is_male, 
+                    data = adult_income_train_simple, 
+                    family = "binomial")
+
+model_results <- model_results %>%
+  rbind(evaluate_model(model_simple, 
+                       adult_income_test_simple, 
+                       threshold = 0.5, 
+                       positive_class = "1", 
+                       model_name = "Simplified (0.5)"))
+
+summary(model_simple)
+```
+# Run Simplified Model with All Interactions
+
+```{r}
+model_simple_interactions <- glm(income_binary ~ (age + has_college_degree + is_married + works_full_time + 
+                    is_white_collar + has_capital_gain + has_capital_loss + is_male)^2, 
+                    data = adult_income_train_simple, 
+                    family = "binomial")
+
+model_results <- model_results %>%
+  rbind(evaluate_model(model_simple_interactions, 
+                       adult_income_test_simple, 
+                       threshold = 0.5, 
+                       positive_class = "1", 
+                       model_name = "Simplified Interactions (0.5)"))
+
+summary(model_simple_interactions)
+```
+
+# Run Simplified Model With Significant Interactions (Trimmed)
+
+```{r}
+model_simple_trimmed <- glm(
+  income_binary ~ age + has_college_degree + is_married + works_full_time +
+    is_white_collar + has_capital_gain + has_capital_loss + is_male +
+    age:is_married + age:works_full_time + age:has_capital_gain +
+    is_married:has_capital_gain + is_married:is_male,
+  data = adult_income_train_simple, 
+  family = "binomial"
+)
+
+model_results <- model_results %>%
+  rbind(evaluate_model(model_simple_trimmed, 
+                       adult_income_test_simple, 
+                       threshold = 0.5, 
+                       positive_class = "1", 
+                       model_name = "Simple Trimmed (0.5)"))
+
+summary(model_simple_trimmed)
+```
+
+# Generate ROC and PR Curves for Each Model
+
+For each model, generate predicted probabilities on the test set.
+
+```{r}
+model_full_probs <- predict(model_full, 
+                            newdata = adult_income_test_full, 
+                            type = "response")
+
+model_simple_probs <- predict(model_simple,
+                              newdata = adult_income_test_simple,
+                              type = "response")
+
+model_simple_interactions_probs <- predict(model_simple_interactions,
+                                           newdata = adult_income_test_simple,
+                                           type = "response")
+
+model_simple_trimmed_probs <- predict(model_simple_trimmed,
+                                      newdata = adult_income_test_simple,
+                                      type = "response")
+```
+
+Create the ROC objects and plot the ROC Curve
+
+```{r}
+full_roc <- roc(adult_income_test_full$income_binary, model_full_probs)
+
+simple_roc <- roc(adult_income_test_simple$income_binary, model_simple_probs)
+
+interactions_roc <- roc(adult_income_test_simple$income_binary, model_simple_interactions_probs)
+
+trimmed_roc <- roc(adult_income_test_simple$income_binary, model_simple_trimmed_probs)
+
+plot(full_roc, col = "blue", legacy.axes = TRUE, main = "ROC Curve")
+
+lines(simple_roc, col = "red")
+
+lines(interactions_roc, col = "green")
+
+lines(trimmed_roc, col = "orange")
+
+legend("bottomright", legend = c("Full", "Simple", "Interactions", "Trimmed"),
+       col = c("blue", "red", "green", "orange"), lwd = 2)
+```
+
+The ROC curve plots sensitivity, or the true positive rate, versus specificity, or the false positive rate.  The closer the curve hugs the top-left corner, the better the model at distinguishing between classes, i.e. there is a higher true positive rate with a lower false positive rate.  The diagonal grey line represents random guessing.
+
+While the curve shape provides a qualitative sense, the AUC value gives a quantitative performance score.  Scores between 0.8 and 0.9 are considered good, and scores greater than 0.9 are considered excellent.  Generally speaking, the curve with the highest AUC is preferred.
+
+In this plot, the curves are very close together, which suggests that all four models perform similarly in terms of classification ability.  Any performance gain between models is marginal from an ROC perspective.
+
+Get AUC values for each model.
+
+```{r}
+auc(full_roc)
+
+auc(simple_roc) 
+
+auc(interactions_roc)
+
+auc(trimmed_roc)
+```
+
+As noted, AUC above 0.85 indicates a very strong classification performance; we're in good territory across all the models.
+
+There is a very modest reduction in discrimination from the full model, but in this application, I don't see this as a serious loss.
+
+The simplified models are all competitive with the last model, the trimmed simplified version, which includes the most significant interactions from the simplified model, retaining 99% of the full model's AUC.
+
+This is a compelling tradeoff in that trimmed model has fewer predictors, easier interpretation, faster scoring and lower risk of overfitting.  Given the operational simplicity and interpretability of the trimmed model, the small loss in AUC is acceptable.
+
+Plot the precision-recall curve.
+
+```{r}
+truth_full <- as.numeric(adult_income_test_full$income_binary)
+
+truth_simple <- as.numeric(adult_income_test_simple$income_binary)
+
+full_pr <- pr.curve(scores.class0 = model_full_probs[truth_full == 1],
+                    scores.class1 = model_full_probs[truth_full == 0],
+                    curve = TRUE)
+
+simple_pr <- pr.curve(scores.class0 = model_simple_probs[truth_simple == 1],
+                      scores.class1 = model_simple_probs[truth_simple == 0],
+                      curve = TRUE)
+
+interactions_pr <- pr.curve(scores.class0 = model_simple_interactions_probs[truth_simple == 1],
+                      scores.class1 = model_simple_interactions_probs[truth_simple == 0],
+                      curve = TRUE)
+
+trimmed_pr <- pr.curve(scores.class0 = model_simple_trimmed_probs[truth_simple == 1],
+                      scores.class1 = model_simple_trimmed_probs[truth_simple == 0],
+                      curve = TRUE)
+
+# Plot PR curves
+plot(full_pr, col = "blue", main = "Precision-Recall Curve")
+
+lines(simple_pr$curve[,1:2], col = "red")
+
+lines(interactions_pr$curve[,1:2], col = "green")
+
+lines(trimmed_pr$curve[,1:2], col = "orange")
+
+legend("topright", legend = c("Full", "Simple", "Interactions", "Trimmed"),
+       col = c("blue", "red", "green", "orange"), lwd = 2)
+
+```
+
+The full model generally outperforms others across most recall thresholds.  The simple and trimmed models are very close, with the trimmed model catching up in the mid-recall range.  The interactions model underperforms initially, i.e. that sharp drop near zero means very poor precision at low recall, which might suggest overfitting or instability at decision boundaries.
+
+The full model is strongest overall, and the trimmed model achieves comparable performance with fewer variables.
+
+
+
+Inspect average precision.
+
+```{r}
+full_pr$auc.integral
+
+simple_pr$auc.integral
+
+interactions_pr$auc.integral
+
+trimmed_pr$auc.integral
+```
+
+All AP scores above 0.70 are solid, especially when the positive class is the minority.  This means the models maintain high precision across a wide range of recall levels.
+
+The drop in AP is small from the full to trimmed models, i.e. 0.7361201 - 0.7168724 = 0.0192486, or a 1.9 percentage point drop.  A bit more pronounced than the change in AUC, but still within the bounds of acceptable performance for a simpler model.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Capture Model Evaluation
+
+Capture simplified model evaluation with test data.
+
+```{r}
+model_results <- model_results %>%
+  rbind(evaluate_model(model_simple, 
+                       adult_income_test_simple, 
+                       threshold = 0.5, 
+                       positive_class = "1", 
+                       model_name = "Simple (0.5)"))
+```
+
+# Apply Weights
+
+Use weight in glm() to give more weight to the minority.
+
+Calculate the class weights.
+
+```{r}
+class_weights <- ifelse(adult_income_full$income_binary == 1,
+                        1 / sum(adult_income_full$income_binary == 1),
+                        1 / sum(adult_income_full$income_binary == 0))
+```
+
+The class weights are inversely proportional to the class frequencies in the dataset. This approach ensures that each class contributes equally to the model’s loss function, even when one class is much smaller.
+
+By using inverse frequency weights, we level the playing field:
+
+| Class | Count  | Weight Formula | Weight Value |
+| ----- | -----  | -------------- | ------------ |
+| 0     |	22,653 | 1 / 22,653   	| ~0.0000441   |
+| 1	    | 7,513	 | 1 / 7,513      |	~0.0001331   |
+
+So each observation from class 1 gets ~3× more weight in the model fit.
+
+# ---------------------------------------
+
+# Run Full Model Weighted
+
+```{r}
+model_full_w <- glm(income_binary ~ age + workclass_group + education_group + marital_status_group +
+                  occupation_group + relationship_group + race + sex + has_capital_gain + 
+                  has_capital_loss + hours_group + native_region,
+                  data = adult_income_full, family = "binomial", 
+                  weights = class_weights)
+
+summary(model_full_w)
+```
+
+# McFadden Pseudo-R2 Score
+
+```{r}
+pR2(model_full_w)
+```
+
+# Confusion Matrix
+
+```{r}
+pred_full <- predict(model_full_w, type = "response")
+
+pred_class_full <- ifelse(pred_full > 0.5, 1, 0)
+
+actual <- factor(adult_income_full$income_binary, levels = c(0, 1))
+
+confusionMatrix(factor(pred_class_full, levels = c(0,1)), actual, positive = "1")
+```
+
+# Simple Model Weighted
+
+```{r}
+model_simple_w <- glm(income_binary ~ age + has_college_degree + is_married + works_full_time + 
+                    is_white_collar + has_capital_gain + has_capital_loss + is_male, 
+                    data = adult_income_simple, 
+                    family = "binomial",
+                    weights = class_weights)
+
+summary(model_simple_w)
+```
+
+# McFadden Pseudo-R2 Score
+
+```{r}
+pR2(model_simple_w)
+```
+
+# Confusion matrix
+
+```{r}
+pred_full <- predict(model_simple_w, type = "response")
+
+pred_class_full <- ifelse(pred_full > 0.5, 1, 0)
+
+actual <- factor(adult_income_simple$income_binary, levels = c(0, 1))
+
+confusionMatrix(factor(pred_class_full, levels = c(0,1)), actual, positive = "1")
+```
+
+
+# ---------------------------------------
+
+# ROC Curve
+
+```{r}
+library(pROC)
+
+# Generate ROC object
+roc_obj <- roc(adult_income_full$income_binary, pred_full)
+
+# Plot ROC curve
+plot(roc_obj, col = "#2C3E50", lwd = 3, main = "ROC Curve")
+abline(a = 0, b = 1, lty = 2, col = "gray")  # Diagonal reference
+
+# Print AUC
+auc(roc_obj)
+
+# Find threshold that maximizes Youden's Index
+opt_coords <- coords(roc_obj, x = "best", best.method = "youden", transpose = FALSE)
+
+# Show optimal threshold and performance
+print(opt_coords)
+
+```
+
+
+# Holdout / Test Set
+
+## Full Model
+
+Split full data.
+
+```{r}
+set.seed(91210)
+
+trainIndex <- createDataPartition(adult_income_full$income_binary, p = 0.7, list = FALSE)
+
+train_full <- adult_income_full[trainIndex, ]
+
+test_full <- adult_income_full[-trainIndex, ]
+```
+
+Train model.
+
+```{r}
+model_full2 <- glm(income_binary ~ age + education_group + marital_status_group + 
+                   has_capital_gain + has_capital_loss + hours_group + 
+                   occupation_group + sex,
+                   data = adult_income_full,
+                   family = "binomial",
+                   weights = class_weights)
+```
+
+Make predictions on test data.
+
+```{r}
+# Predict probabilities
+prob_test <- predict(model_full2, newdata = test_full, type = "response")
+
+# Convert to class predictions using 0.5 threshold
+pred_class <- ifelse(prob_test > 0.5, 1, 0)
+```
+
+Evaluate the model on the test data.
+
+```{r}
+actual_class <- factor(test_full$income_binary, levels = c(0, 1))
+
+predicted_class <- factor(pred_class, levels = c(0, 1))
+```
+
+Produce confusion matrix.
+
+```{r}
+confusionMatrix(predicted_class, actual_class, positive = "1")
+```
+
+## Simple Model
+
+Split full data.
+
+```{r}
+set.seed(91210)
+
+trainIndex <- createDataPartition(adult_income_simple$income_binary, p = 0.7, list = FALSE)
+
+train_simple <- adult_income_simple[trainIndex, ]
+
+test_simple <- adult_income_simple[-trainIndex, ]
+```
+
+Train model.
+
+```{r}
+model_simple2 <- glm(income_binary ~ age + has_college_degree + is_married + works_full_time + 
+                     is_white_collar + has_capital_gain + has_capital_loss + is_male, 
+                     data = train_simple, 
+                     family = "binomial")
+```
+
+Make predictions on test data.
+
+```{r}
+# Predict probabilities
+prob_test <- predict(model_simple2, newdata = test_simple, type = "response")
+
+# Convert to class predictions using 0.5 threshold
+pred_class <- ifelse(prob_test > 0.5, 1, 0)
+```
+
+Evaluate the model on the test data.
+
+```{r}
+actual_class <- factor(test_simple$income_binary, levels = c(0, 1))
+
+predicted_class <- factor(pred_class, levels = c(0, 1))
+```
+
+Produce confusion matrix.
+
+```{r}
+confusionMatrix(predicted_class, actual_class, positive = "1")
+```
+
+
+
+
+## With Full Weighted Model
+
+```{r}
+# Set up 10-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 5, classProbs = TRUE,
+                     summaryFunction = twoClassSummary, savePredictions = "final")
+
+# Recode outcome to "yes"/"no" for caret
+adult_income$income_binary_factor <- factor(ifelse(adult_income_full$income_binary == 1, "yes", "no"))
+
+# Train logistic model
+model_cv <- train(income_binary_factor ~ age + has_college_degree + ...,
+                  data = adult_income,
+                  method = "glm",
+                  family = "binomial",
+                  metric = "ROC",  # optimize for AUC
+                  trControl = ctrl)
+```
+
+## With Simple Weighted Model
+
+
+
+```{r}
+model_simple_weighted <- glm(income_binary ~ age + has_college_degree + is_married + works_full_time + 
+                             is_white_collar + has_capital_gain + has_capital_loss + is_male, 
+                             data = adult_income_simple, 
+                             family = "binomial",
+                             weights = class_weights)
+
+summary(model_simple_weighted)
+```
+
+# McFadden Pseudo-R2 Score
+
+```{r}
+pR2(model_simple_weighted)
+```
+
+# Confusion matrix
+
+```{r}
+pred_full <- predict(model_simple_weighted, type = "response")
+
+pred_class_full <- ifelse(pred_full > 0.5, 1, 0)
+
+actual <- factor(adult_income_simple$income_binary, levels = c(0, 1))
+
+confusionMatrix(factor(pred_class_full, levels = c(0,1)), actual, positive = "1")
+```
+
+# Report Log-Odds Ratios
+
+# Conclusions
+
+## Full Model
+
+## Simplified Model
