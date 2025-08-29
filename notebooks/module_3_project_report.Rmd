@@ -69,7 +69,7 @@ All project files are maintained in [this Github repository](https://github.com/
 
 The analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` for data manipulation, `knitr` for report formatting, and `pROC` for ROC/AUC analysis.
 
-```{r, echo = FALSE}
+```{r, load_libraries echo = FALSE, message = FALSE}
 library("caret")
 library("dplyr")
 library("ggplot2")
@@ -86,7 +86,7 @@ library("tidyr")
 
 Load the income data.
 
-```{r}
+```{r load_data}
 income <- readRDS("../data/income.rds")
 ```
 
@@ -94,7 +94,7 @@ income <- readRDS("../data/income.rds")
 
 This code generates a report summarizing missing values in the dataset at both the column and row level. First, it counts missing values for each variable and calculates the percentage of missingness (col_missing). Then, it computes the total number and percentage of rows containing any missing values (row_missing). Finally, the two summaries are combined into a single table (missing_report) for easy inspection and reporting.
 
-```{r}
+```{r missing_data}
 # Create column level summary.
 
 col_missing <- income %>%
@@ -123,7 +123,7 @@ kable(missing_report,
 
 Approximately 7.36% of rows (2,396 of 32,560) contain missing values, exclusively in the categorical variables related to work class, occupation, and native country. These values cannot be meaningfully imputed, so the affected rows will be removed from the dataset. Given the remaining 30,161 complete records, this approach preserves data integrity and is unlikely to impact model performance or statistical power.
 
-```{r}
+```{r drop_missing_data}
 income <- income %>% drop_na()
 ```
 
@@ -177,33 +177,46 @@ for (pair in cat_pairs) {
 
 I'll engineer a `career_stage` feature with four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60, and 4) retirement transition (ages 61+).  See **Appendices | Appendix A: Exploratory Data Analysis | Age** section for rationale.
 
+```{r define_career_stage}
+income <- income %>%
+  mutate(career_stage = case_when(
+    age_num < 31 ~ "Entry Level",
+    age_num >= 21 & age_num < 45 ~ "Growth Phase",
+    age_num >= 36 & age_num < 60 ~ "Peak Earning",
+    age_num >= 61~ "Retirement Transition ",
+    TRUE ~ "Unknown"))
+```
+
 ### Workclass Group
 
 I'll engineer a `workclass_group` feature with four groups: 1) not employed, 2) self-employed, 3) government, and 4) private.  Will also address missing values.  See **Appendices | Appendix A: Exploratory Data Analysis | Workclass** section for rationale.
 
-```{r}
+```{r define_workclass_group}
 income <- income %>%
-  mutate(workclass_group = case_when(workclass_cat %in% c("Without-pay", "Never-worked") ~ "Not-employed",
-                                     workclass_cat %in% c("Self-emp-inc", "Self-emp-not-inc") ~ "Self-employed",
-                                     workclass_cat %in% c("Local-gov", "State-gov", "Federal-gov") ~ "Government",
-                                     workclass_cat == "Private" ~ "Private",
-                                     is.na(workclass_cat) | workclass_cat == "?" ~ "Unknown",
-                                     TRUE ~ "Other"))
+  mutate(workclass_group_cat = case_when(
+    workclass_cat %in% c("Without-pay", "Never-worked") ~ "Not-employed",
+    workclass_cat %in% c("Self-emp-inc", "Self-emp-not-inc") ~ "Self-employed",
+    workclass_cat %in% c("Local-gov", "State-gov", "Federal-gov") ~ "Government",
+    workclass_cat == "Private" ~ "Private",
+    is.na(workclass_cat) | workclass_cat == "?" ~ "Unknown",
+    TRUE ~ "Other"))
 ```
 
 ### Education Level (Ordinal Coding)
 
 I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.  See **Appendices | Appendix A: Exploratory Data Analysis | Education** section for rationale.
 
-```{r}
+```{r define_education_level_cat}
 education_levels <- c(
-  "Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", "10th", "11th", "12th",
-  "HS-grad", "Some-college", "Assoc-voc", "Assoc-acdm",
-  "Bachelors", "Masters", "Prof-school", "Doctorate"
-)
+  "Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
+  "10th", "11th", "12th", "HS-grad", "Some-college", 
+  "Assoc-voc", "Assoc-acdm", "Bachelors", "Masters", 
+  "Prof-school", "Doctorate")
 
 income <- income %>%
-  mutate(education_level_ord = factor(education_cat, levels = education_levels, ordered = TRUE))
+  mutate(education_level_cat = factor(education_cat, 
+                                      levels = education_levels, 
+                                      ordered = TRUE))
 ```
 
 ### Years of Education
@@ -212,11 +225,25 @@ Years of education is essentially a numeric encoding of `education_cat` and the 
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Years of Education** section for rationale.
 
+```{r drop_years_of_education}
+income <- income %>%
+  select(-years_of_education_num)
+```
+
 ### Marital Group
 
 Collapsing sparse categories may improve model stability and interpretability, e.g. married, non-traditional married, previously married, never married.  Will address as part of data transformations.
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Marital Status** section for rationale.
+
+```{r define_marital_group}
+income <- income %>%
+  mutate(marital_status_group = case_when(
+    marital_status_cat %in% c("Married-civ-spouse", "Married-AF-spouse") ~ "Married",
+    marital_status_cat %in% c("Divorced", "Separated", "Widowed") ~ "Previously-married",
+    marital_status_cat == "Never-married" ~ "Never-married",
+    TRUE ~ "Other"))
+```
 
 ### Occupation Group
 
@@ -224,26 +251,26 @@ Will engineer a grouped variable for comparison purposes so that each group refl
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Occupation** section for rationale.
 
-```{r}
+```{r define_occupation_group}
 income <- income %>%
   mutate(
-    occupation_group = case_when(occupation_cat %in% c("Prof-specialty", 
-                                                       "Exec-managerial") ~ "Professional/Managerial",
-    occupation_cat %in% c("Craft-repair", 
-                          "Transport-moving", 
-                          "Machine-op-inspct", 
-                          "Handlers-cleaners",
-                          "Protective-serv", 
-                          "Tech-support") ~ "Skilled Trades",
-    occupation_cat %in% c("Adm-clerical", 
-                          "Sales") ~ "Clerical/Sales",
-    occupation_cat %in% c("Other-service", 
-                          "Priv-house-serv") ~ "Service Roles",
-    occupation_cat == "Farming-fishing" ~ "Agricultural",
-    occupation_cat == "Armed-Forces" ~ "Military",
-    is.na(occupation_cat) ~ "Missing/Unknown",
-    TRUE ~ "Other"
-    ))
+    occupation_group = case_when(
+      occupation_cat %in% c("Prof-specialty", 
+                            "Exec-managerial") ~"Professional/Managerial",
+      occupation_cat %in% c("Craft-repair", 
+                            "Transport-moving", 
+                            "Machine-op-inspct", 
+                            "Handlers-cleaners",
+                            "Protective-serv", 
+                            "Tech-support") ~ "Skilled Trades",
+      occupation_cat %in% c("Adm-clerical", 
+                            "Sales") ~ "Clerical/Sales",
+      occupation_cat %in% c("Other-service", 
+                            "Priv-house-serv") ~ "Service Roles",
+      occupation_cat == "Farming-fishing" ~ "Agricultural",
+      occupation_cat == "Armed-Forces" ~ "Military",
+      is.na(occupation_cat) ~ "Missing/Unknown",
+      TRUE ~ "Other"))
 ```
 
 ### Hours Group
@@ -252,12 +279,12 @@ Implement hours-based segmentation could be a useful feature in models.  Treatin
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Hours Per Week** section for rationale.
 
-```{r}
-income <- incoime %>%
-  mutate(hours_group = case_when(hours_per_week_num < 30 ~ "Underemployed",
-                                 hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
-                                 hours_per_week_num > 45 ~ "Overtime",
-                                 TRUE ~ NA_character))
+```{r define_hours_group}
+income <- income %>%
+  mutate(hours_group = case_when(
+    hours_per_week_num < 30 ~ "Underemployed",
+    hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
+    hours_per_week_num > 45 ~ "Overtime"))
 ```
 
 ### Relationship Role
@@ -266,15 +293,14 @@ Engineer feature to bin relationships into relationship archetypes that are more
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Relationship** section for rationale.
 
-```{r}
+```{r define_relationship_role}
 income <- income %>%
   mutate(relationship_role = case_when(
-    relationship_cat %in% c("Husband", "Wife") & hours_per_week >= 40 ~ "Primary Earner",
-    relationship_cat %in% c("Husband", "Wife") & hours_per_week < 40 ~ "Secondary Earner",
+    relationship_cat %in% c("Husband", "Wife") & hours_per_week_num >= 40 ~ "Primary Earner",
+    relationship_cat %in% c("Husband", "Wife") & hours_per_week_num < 40 ~ "Secondary Earner",
     relationship_cat %in% c("Not-in-family", "Unmarried") ~ "Independent Adult",
     relationship_cat %in% c("Own-child", "Other-relative") ~ "Dependent/Other",
-    TRUE ~ "Unclassified"
-  ))
+    TRUE ~ "Unclassified"))
 ```
 
 ### Race Income Score
@@ -283,20 +309,39 @@ An income-weighted race score is a way to numerically encode the average income 
 
 See **Appendices | Appendix A: Exploratory Data Analysis | Race** section for rationale.
 
-```{r}
+```{r define_race_income_rate}
 race_income_rate <- income %>%
-  group_by(race) %>%
-  summarise(race_income_score = mean(income == ">50K"))
+  group_by(race_cat) %>%
+  summarise(race_income_score = mean(income_num, na.rm = TRUE))
 
 income <- income %>%
-  left_join(race_income_rate, by = "race")
+  left_join(race_income_rate, by = "race_cat")
 ```
 
 ### Has Investment Activity
 
-```{r}
+Create a single investment activity flag.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Capital Gain / Capital Loss** section for rationale.
+
+```{r define_has_investment_activity}
 income <- income %>%
-  mutate(has_investment_activity = if_else(capital_gain > 0 | capital_loss > 0, 1, 0))
+  mutate(has_investment_activity = if_else(capital_gain_num > 0 | capital_loss_num > 0, 1, 0))
+```
+
+### Is US Native
+
+Create a binary flag to captures whether someone is native to the dominant country — useful for income modeling, especially if immigration status or global labor dynamics are relevant.
+
+See **Appendices | Appendix A: Exploratory Data Analysis | Native Country** section for rationale.
+
+```{r define_is_us_native}
+income <- income %>%
+  mutate(is_us_native = if_else(native_country_cat == "United-States", 1, 0))
+```
+
+```{r save_data_with_features}
+saveRDS(income, "../data/income_final.rds")
 ```
 
 ## Class Balance
@@ -309,7 +354,9 @@ The dataset is split into 60% training, 20% validation, and 20% test. This alloc
 
 To preserve representativeness, the data is split using stratified sampling so that the proportion of individuals earning `≤50K` and `>50K` remain consistent across the training, validation, and test sets.
 
-```{r}
+```{r split_data}
+income <- readRDS("../data/income_final.rds")
+
 set.seed(123)
 
 # Initial train/test split.
@@ -331,7 +378,7 @@ test <- temp[-valid_idx, ]
 
 Check class balance.
 
-```{r}
+```{r check_splits}
 check_balance <- function(df, name) {
   df %>%
     count(income_below_num) %>%
@@ -362,7 +409,18 @@ We begin by preparing the predictor matrix X, containing numeric representations
 
 ```{r}
 # Step 1: Prepare predictor matrix
-X <- as.matrix(train[, c("age_num", "education_num", "marital_status_num")])
+# X <- as.matrix(train[, c("age_num", "education_num", "marital_status_num")])
+
+X <- as.matrix(train[, c("career_stage", 
+                         "workclass_group_cat", 
+                         "education_level_cat",
+                         "marital_status_group",
+                         "occupation_group",
+                         "hours_group",
+                         "relationship_role",
+                         "race_income_score",
+                         "has_investment_activity",
+                         "is_us_native")])
 
 # Step 2: Create indicator matrix for binary response
 G <- train$income_num  # Assumed to be 0/1
@@ -577,6 +635,12 @@ list(confusion = confusion,
 # Appendices
 
 ## Appendix A: Exploratory Data Analysis
+
+Load raw dataset for EDA.
+
+```{r}
+income <- readRDS("../data/income.rds")
+```
 
 ### Age
 
@@ -1243,8 +1307,6 @@ For fairness or interpretability, you could explore whether high capital losses 
 
 ### Native Country
 
-
-
 ```{r}
 native_country <- income %>%
   group_by(native_country_cat) %>%
@@ -1259,11 +1321,11 @@ kable(native_country,
       align = c("l", "r", "r"))
 ```
 
+United-States likely accounts for 90%+ of the sample.
 
+Most other countries are sparsely represented — some with only a handful of observations.
 
-
-
-
+Using raw categories risks overfitting to noise or inflating model complexity.
 
 ```{r}
 # Dataset 1: US vs. All Others
@@ -1293,8 +1355,6 @@ ggplot(native_country_us_vs_other, aes(x = forcats::fct_reorder(group, percent, 
 
 ```
 
-
-
 ```{r}
 native_country_grouped <- native_country %>%
   filter(native_country_cat != "United-States") %>%
@@ -1319,15 +1379,4 @@ ggplot(native_country_grouped, aes(y = forcats::fct_reorder(native_country_group
 
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
+Create a binary flag to captures whether someone is native to the dominant country — useful for income modeling, especially if immigration status or global labor dynamics are relevant.
