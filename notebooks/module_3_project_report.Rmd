@@ -411,20 +411,37 @@ We begin by preparing the predictor matrix X, containing numeric representations
 # Step 1: Prepare predictor matrix
 # X <- as.matrix(train[, c("age_num", "education_num", "marital_status_num")])
 
-X <- as.matrix(train[, c("career_stage", 
-                         "workclass_group_cat", 
-                         "education_level_cat",
-                         "marital_status_group",
-                         "occupation_group",
-                         "hours_group",
-                         "relationship_role",
-                         "race_income_score",
-                         "has_investment_activity",
-                         "is_us_native")])
+# X <- model.matrix(~ age_num + education_num + marital_status_num - 1, data = train)
+
+X <- model.matrix(~ career_stage +
+                    workclass_group_cat +
+                    education_level_cat +
+                    marital_status_group +
+                    occupation_group +
+                    hours_group +
+                    relationship_role +
+                    race_income_score +
+                    has_investment_activity +
+                    is_us_native - 1, data = train)
+
+# X <- as.matrix(train[, c("career_stage", 
+#                          "workclass_group_cat", 
+#                          "education_level_cat",
+#                          "marital_status_group",
+#                          "occupation_group",
+#                          "hours_group",
+#                          "relationship_role",
+#                          "race_income_score",
+#                          "has_investment_activity",
+#                          "is_us_native")])
 
 # Step 2: Create indicator matrix for binary response
 G <- train$income_num  # Assumed to be 0/1
 Y <- model.matrix(~ factor(G) - 1)  # One-hot encoding
+
+# X <- as.data.frame(X)
+
+# Y <- train$income_num
 ```
 
 A multivariate linear regression is fit with the one-hot encoded response matrix. This approach models the probability of each class as a linear combination of predictors.
@@ -432,6 +449,9 @@ A multivariate linear regression is fit with the one-hot encoded response matrix
 ```{r}
 # Step 3: Fit multivariate linear regression
 fit <- lm(Y ~ X)
+
+summary(fit)
+
 ```
 
 Using the fitted model, we predict scores for each class. These predicted scores may fall outside the 0–1 range, which highlights the limitation of using linear regression for classification.
