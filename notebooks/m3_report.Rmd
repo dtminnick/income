@@ -77,7 +77,7 @@ My analysis leverages the following R packages: `caret` for model training and e
 
 Two customized R functions enable comparison of model coefficients and residuals.
 
-```{r, load_libraries echo = FALSE, message = FALSE}
+```{r, load_libraries, echo = FALSE, message = FALSE}
 library("caret")
 library("dplyr")
 library("ggplot2")
@@ -198,7 +198,7 @@ age_summary <- income %>%
 
 # Plot the distribution of values.
 
-ggplot(age, aes(x = age_num, y = entries)) +
+ggplot(age_summary, aes(x = age_num, y = entries)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Distribution of Age",
        x = "Age",
@@ -206,7 +206,7 @@ ggplot(age, aes(x = age_num, y = entries)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(age$entries) * 1.2)
+  expand_limits(y = max(age_summary$entries) * 1.2)
 ```
 
 This distribution mirrors what you'd expect from a working-age population in the US: a peak around ages 20-30, reflecting a large cohort entering the workforce, a gradual decline beginning at age 37-38 through age 55, typical of aging out of peak earning years or shifting to preparation for retirement, and dropoff after ages 60-50, reflecting retirement and reduced representation.
@@ -259,10 +259,10 @@ income <- income %>%
     age_num >= 61~ "Retirement Transition",
     TRUE ~ "Unknown")) %>%
   mutate(career_stage_num = case_when(
-    career_stage == "Entry Level" ~ 1,
-    career_stage == "Growth Phase" ~ 2,
-    career_stage == "Peak Earning" ~ 3,
-    career_stage == "Retirement Transition" ~ 4))
+    career_stage_cat == "Entry Level" ~ 1,
+    career_stage_cat == "Growth Phase" ~ 2,
+    career_stage_cat == "Peak Earning" ~ 3,
+    career_stage_cat == "Retirement Transition" ~ 4))
 ```
 
 Visually confirm the non-linear effects of career stage on income classification.
@@ -271,14 +271,14 @@ Visually confirm the non-linear effects of career stage on income classification
 # Group by career stage.
 
 career_stage_prop <- income %>%
-  group_by(career_stage, income_cat) %>%
+  group_by(career_stage_cat, income_cat) %>%
   summarise(count = n(), .groups = "drop") %>%
-  group_by(career_stage) %>%
+  group_by(career_stage_cat) %>%
   mutate(prop = count / sum(count))
 
 # Generate plot.
 
-ggplot(career_stage_prop, aes(x = career_stage, y = prop, fill = income_cat)) +
+ggplot(career_stage_prop, aes(x = career_stage_cat, y = prop, fill = income_cat)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
@@ -819,7 +819,7 @@ train$marital_status_group <- factor(train$marital_status_group)
 
 X <- model.matrix(~ poly(career_stage_num, 2) +
                         marital_status_group +
-                        hours_group +
+                        hours_group_num +
                         education_group_num +
                         has_investment_activity - 1, data = train)
 
@@ -998,7 +998,7 @@ This AUC score indicates that the model can distinguish between `>50K` and `<=50
 model_logistic <- glm(income_num ~ 
                         poly(career_stage_num, 2) +
                         marital_status_group +
-                        hours_group +
+                        hours_group_num +
                         education_group_num +
                         has_investment_activity,
                     data = train, weights = weight, family = "binomial")
@@ -1192,60 +1192,60 @@ At 0.88, these models have very good discrimination, separating high-income from
 ### Coefficient Comparison
 
 ```{r}
-model_G0 <- model_linear_matrix$coefficients[, "factor(G)0"]
-model_G1 <- model_linear_matrix$coefficients[, "factor(G)1"]
-
-# Add names to preserve predictor labels
-names(model_G0) <- rownames(model_linear_matrix$coefficients)
-names(model_G1) <- rownames(model_linear_matrix$coefficients)
-
-
-coef_df <- compare_model_coefficients(
-  G0 = model_G0,
-  G1 = model_G1,
-  logistic = model_logistic
-)
-
-head(coef_df)
+# model_G0 <- model_linear_matrix$coefficients[, "factor(G)0"]
+# model_G1 <- model_linear_matrix$coefficients[, "factor(G)1"]
+# 
+# # Add names to preserve predictor labels
+# names(model_G0) <- rownames(model_linear_matrix$coefficients)
+# names(model_G1) <- rownames(model_linear_matrix$coefficients)
+# 
+# 
+# coef_df <- compare_model_coefficients(
+#   G0 = model_G0,
+#   G1 = model_G1,
+#   logistic = model_logistic
+# )
+# 
+# head(coef_df)
 ```
 
 Visualize coefficient estimates with error bars...
 
 ```{r}
-ggplot(coef_df, aes(x = predictor, y = Estimate, color = model)) +
-  geom_point(position = position_dodge(width = 0.5), size = 2) +
-  geom_errorbar(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`),
-                position = position_dodge(width = 0.5), width = 0.2) +
-  coord_flip() +
-  labs(title = "Coefficient Estimates with Standard Errors",
-       x = "Predictor", y = "Estimate") +
-  theme_minimal()
+# ggplot(coef_df, aes(x = predictor, y = Estimate, color = model)) +
+#   geom_point(position = position_dodge(width = 0.5), size = 2) +
+#   geom_errorbar(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`),
+#                 position = position_dodge(width = 0.5), width = 0.2) +
+#   coord_flip() +
+#   labs(title = "Coefficient Estimates with Standard Errors",
+#        x = "Predictor", y = "Estimate") +
+#   theme_minimal()
 
 ```
 
 P-value heatmap...
 
 ```{r}
-ggplot(coef_df, aes(x = predictor, y = model, fill = p_value)) +
-  geom_tile(color = "white") +
-  scale_fill_gradient(low = "darkred", high = "white", trans = "log", name = "p-value") +
-  labs(title = "P-Value Comparison Across Models",
-       x = "Predictor", y = "Model") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# ggplot(coef_df, aes(x = predictor, y = model, fill = p_value)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "darkred", high = "white", trans = "log", name = "p-value") +
+#   labs(title = "P-Value Comparison Across Models",
+#        x = "Predictor", y = "Model") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
 
 Faceted coefficient plot by model...
 
 ```{r}
-ggplot(coef_df, aes(x = Estimate, y = reorder(predictor, Estimate))) +
-  geom_point() +
-  geom_errorbarh(aes(xmin = Estimate - `Std. Error`, xmax = Estimate + `Std. Error`), height = 0.2) +
-  facet_wrap(~ model, scales = "free_x") +
-  labs(title = "Model Coefficients by Predictor",
-       x = "Estimate", y = "Predictor") +
-  theme_minimal()
+# ggplot(coef_df, aes(x = Estimate, y = reorder(predictor, Estimate))) +
+#   geom_point() +
+#   geom_errorbarh(aes(xmin = Estimate - `Std. Error`, xmax = Estimate + `Std. Error`), height = 0.2) +
+#   facet_wrap(~ model, scales = "free_x") +
+#   labs(title = "Model Coefficients by Predictor",
+#        x = "Estimate", y = "Predictor") +
+#   theme_minimal()
 
 ```
 
@@ -1292,7 +1292,7 @@ validation$marital_status_group <- factor(validation$marital_status_group,
 
 X_valid <- model.matrix(~ poly(career_stage_num, 2) +
                           marital_status_group +
-                          hours_group +
+                          hours_group_num +
                           education_group_num +
                           has_investment_activity - 1,
                         data = validation)
@@ -1370,13 +1370,82 @@ cm_linear_matrix
 
 ### Logistic Regression
 
+Ensure factor levels match.
 
+```{r}
+validation$marital_status_group <- factor(validation$marital_status_group,
+                                          levels = levels(train$marital_status_group))
+```
+
+Predict probabilities and class labels.
+
+```{r}
+# Predict probabilities for class 1 (income >50K).
+
+pred_probs_logistic <- predict(model_logistic, newdata = validation, type = "response")
+
+# Convert to binary class predictions using threshold 0.5.
+
+class_pred_logistic <- ifelse(pred_probs_logistic >= 0.5, 1, 0)
+
+```
+
+Evaluate with confusion matrix.
+
+```{r}
+
+
+cm_logistic <- caret::confusionMatrix(
+  factor(class_pred_logistic),
+  factor(validation$income_num),
+  positive = "1"
+)
+
+cm_logistic
+
+```
 
 # Choose Final Model
 
 # Retrain Final Model
 
 # Evaluate Model
+
+
+Ensure factor levels match.
+
+```{r}
+test$marital_status_group <- factor(test$marital_status_group,
+                                          levels = levels(train$marital_status_group))
+```
+
+Predict probabilities and class labels.
+
+```{r}
+# Predict probabilities for class 1 (income >50K).
+
+pred_probs_logistic <- predict(model_logistic, newdata = test, type = "response")
+
+# Convert to binary class predictions using threshold 0.5.
+
+class_pred_logistic <- ifelse(pred_probs_logistic >= 0.5, 1, 0)
+
+```
+
+Evaluate with confusion matrix.
+
+```{r}
+
+
+cm_logistic <- caret::confusionMatrix(
+  factor(class_pred_logistic),
+  factor(test$income_num),
+  positive = "1"
+)
+
+cm_logistic
+
+```
 
 # Final Analysis
 
