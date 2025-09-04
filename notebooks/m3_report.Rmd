@@ -1,0 +1,1413 @@
+---
+title: "Predicting Income Level from Career Stage, Education Level, and Investment Activity"
+subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic Regression Approaches"
+author: "Donnie Minnick, Statistical Learning - Fall A 2025"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    theme:
+      version: 4
+      bootswatch: flatly
+      primary: "#2C3E50"   # deep blue
+      secondary: "#18BC9C" # accent teal
+      base_font: "Arial"
+      heading_font: "Calibri"
+---
+
+# Project Overview
+
+This project evaluates two modeling approaches, linear regression with an indicator matrix and logistic regression, to determine which more reliably classifies individuals as earning above or below $50,000 per year. 
+
+Using the UCI Adult Income dataset, the comparison focuses on career stage, education level, and investment activity as the explanatory variables.
+
+I compare model performance using practical measures, including accuracy, sensitivity, specificity, and AUC. 
+
+My goal is to identify the method that not only provides stronger predictive capability but also offers clearer insight into how these three dimensions of socioeconomic behavior and opportunity contribute to income differences.
+
+## Analysis Question
+
+How do linear regression with an indicator matrix and logistic regression compare in their ability to classify individuals as earning above or below $50,000 per year, based on career stage, education level, and investment activity, in terms of accuracy, sensitivity, specificity, and AUC?
+
+## Data Suitability
+
+The UCI Adult Income dataset is well suited for this analysis based on the following characteristics:
+
+**Binary Target Variable:** The income label is already dichotomized as `<=50K` and `>50K`, making it ideal for classification tasks.
+
+**Relevant Predictors:** Career stage can be proxied through variables such as age, occupation, and years of work experience. Education level is directly available in multiple forms (years of education and categorical attainment). And investment activity can be approximated through features like capital gains and capital losses, which provide signals of financial activity beyond earned income.
+
+**Mixed Data Types:** These predictors combine categorical (education level, occupation) and continuous (capital gains, capital losses, age) data, allowing a comparison of how well each modeling method handles different variable types.
+
+**Real-World Relevance:** The selected variables represent core levers of socioeconomic advancement, human capital (education), labor market position (career stage), and financial behavior (investment activity). Evaluating their relationship to income provides insights into drivers of upward mobility.
+
+## Candidate Models
+
+### Linear Regression with an Indicator Matrix
+
+Linear regression, when applied with a binary indicator response, can be used to estimate probabilities of class membership. Although not traditionally designed for classification, it provides a straightforward benchmark and can reveal how continuous predictors like age or hours worked relate linearly to income. However, it may yield predictions outside the 0–1 range and does not naturally account for the probabilistic nature of binary outcomes.
+
+### Logistic Regression
+
+Logistic regression is a standard method for binary classification, modeling the log-odds of the outcome as a linear combination of predictors. It constrains predicted values between 0 and 1 and provides interpretable coefficients in terms of odds ratios. It is particularly well-suited for this problem and serves as the conventional baseline for evaluating newer or more complex classifiers.
+
+### Why Compare?
+
+Placing these two approaches side by side highlights the importance of choosing models that align with the data structure and analysis question. By comparing their performance on accuracy, sensitivity, specificity, and AUC, this analysis will demonstrate the trade-offs between a general-purpose regression method and a model purpose-built for classification.
+
+### Baseline Expectations
+
+Before conducting the analysis, it is important to establish expectations about how the candidate models are likely to perform:
+
+**Linear Regression Benchmark:** Linear regression with an indicator matrix may provide a useful baseline, but its predictions can extend outside the valid probability range and may not align as well with classification thresholds. Accuracy may be reasonable, but sensitivity and specificity are likely to suffer compared to logistic regression.
+
+**Logistic Regression Advantage:** Because logistic regression is specifically designed for binary classification, it is expected to outperform linear regression in terms of calibration and overall predictive reliability. Its ability to constrain predictions between 0 and 1 aligns naturally with the problem structure.
+
+**Comparative Outlook:** Logistic regression is anticipated to deliver higher AUC and more balanced classification metrics, while linear regression may illustrate the pitfalls of applying a general-purpose model to a classification task. This contrast should highlight the importance of model choice in predictive analytics.
+
+## Github Repo and Source Data File
+
+All project files are maintained in [this Github repository](https://github.com/dtminnick/income).
+
+The UCI Adult Income dataset and related information are available for download from the [UCI archive site](https://archive.ics.uci.edu/dataset/2/adult).
+
+## Code Libraries
+
+My analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` and 'tidyr' for data manipulation, `ggplot2` for plots, `knitr` for table formatting, and `pROC` for ROC/AUC analysis.
+
+Two customized R functions enable comparison of model coefficients and residuals.
+
+```{r, load_libraries echo = FALSE, message = FALSE}
+library("caret")
+library("dplyr")
+library("ggplot2")
+library("knitr")
+library("pROC")
+library("tidyr")
+
+source("../R/compare_model_coefficients.R")
+source("../R/compare_model_residuals.R")
+```
+
+# Data Exploration, Cleaning and Transformation
+
+Exploratory analysis focuses on understanding five variables in the source data that will be transformed for analysis purposes. Three of the variables have a categorical version and numerical version to aid exploratory analysis.
+
+Load the income data and select in-scope variables.
+
+```{r load_data}
+income <- readRDS("../data/income.rds") %>%
+  select(income_cat, 
+         income_num, 
+         age_num,
+         marital_status_cat,
+         marital_status_num,
+         hours_per_week_num,
+         education_cat, 
+         education_num, 
+         capital_gain_num, 
+         capital_loss_num)
+```
+
+## Missing Values
+
+This code generates a report summarizing missing values in the dataset at both the column and row level. Then, it computes the total number and percentage of rows containing any missing values. Finally, the two summaries are combined into a single table for easy inspection and reporting.
+
+```{r missing_data}
+# Create column level summary.
+
+col_missing <- income %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(),
+               names_to = "variable",
+               values_to = "missing_count") %>%
+  mutate(missing_percent = missing_count / nrow(income) * 100)
+
+# Create row level summary.
+
+row_missing <- tibble(variable = "rows_with_missing_data",
+                      missing_count = sum(!complete.cases(income)),
+                      missing_percent = sum(!complete.cases(income)) / nrow(income) * 100)
+
+# Combine summaries.
+
+missing_report <- bind_rows(col_missing, row_missing)
+
+# Generate formatted report.
+
+kable(missing_report,
+      col.names = c("Variable", "Missing Count", "Missing Percent"),
+      caption = "Missing Data",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+The table confirms there are no rows with missing data in the reported rows and columns.  The source dataset contains 32,560 observations.
+
+## Income (Response Variable)
+
+`income_cat` is a binary categorical variable indicating whether an individual's annual income exceeds $50,000. It has two levels: `<=50K` for those earning $50,000 or less, and `>50K` for those earning more than $50,000.  `income_num` is a numeric variable that corresponds to `income_cat`, i.e. 0 represents the `<=50k` category and 1 represents the `>50k` category.
+
+```{r eda_income}
+# Generate a summary of the income variable.
+
+income_summary <- income %>%
+  group_by(income_cat) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+# Plot the distribution of values.
+
+ggplot(income_summary, aes(x = income_cat, y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Income",
+       x = "Income",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(income_summary$entries) * 1.2)
+```
+
+This distribution is a classic case of class imbalance and it’s substantial: 76% of individuals fall into the `<=50K` category, while only 24% belong to the `>50K` category.
+
+Given the potential baseline accuracy trap, i.e. because the `<=50K` class dominates the dataset at 76%, I can achieve high accuracy simply by predicting the majority class every time. But this doesn't provide a meaningful model.
+
+I need to also measure how well the models detect the minority class, ensure that I am not over-predicting the majority class, and generate models with overall discriminatory power.  I will use weights as a means to balance the classes before training the models.
+
+```{r}
+# Make response variable a factor.
+
+income <- income %>%
+  mutate(income_num = factor(income_num, levels = c(0, 1)))
+```
+
+## Age
+
+`age_num` is a continuous numeric variable, ranging from 17 to 90.
+
+```{r}
+# Generate a summary of the age variable.
+
+age_summary <- income %>%
+  group_by(age_num) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+# Plot the distribution of values.
+
+ggplot(age, aes(x = age_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Age",
+       x = "Age",
+       y = "Entries") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(age$entries) * 1.2)
+```
+
+This distribution mirrors what you'd expect from a working-age population in the US: a peak around ages 20-30, reflecting a large cohort entering the workforce, a gradual decline beginning at age 37-38 through age 55, typical of aging out of peak earning years or shifting to preparation for retirement, and dropoff after ages 60-50, reflecting retirement and reduced representation.
+
+Age is likely nonlinear in its relationship to income class.  Use binning to confirm this dynamic.
+
+```{r}
+# Create age bins.
+
+income_age <- income %>%
+  mutate(age_bin = cut(age_num, breaks = seq(15, 90, by = 5), include.lowest = TRUE))
+
+# Calculate proportions within each age bin and income group.
+
+age_income_prop <- income_age %>%
+  group_by(age_bin, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(age_bin) %>%
+  mutate(prop = count / sum(count))
+
+# Generate plot.
+
+ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proportion of Income Classes by Age Group",
+       x = "Age Group",
+       y = "Proportion",
+       fill = "Income Class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+This plot shows that income probability doesn't increase linearly with age; rather, it peaks mid-career and then drops.  I'll use a binning strategy to model this non-monotonic pattern in a `career_stage` variable, i.e. instead of assuming that each year of age adds the same effect, binning allows me to treat age as a set of behavioral groups.
+
+### Career Stage
+
+The `career_stage` feature will contain four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60), and 4) retirement transition (ages 61+).
+
+```{r define_career_stage}
+# Create career_stage and career_stage_num variables.
+
+income <- income %>%
+  mutate(career_stage_cat = case_when(
+    age_num < 31 ~ "Entry Level",
+    age_num >= 21 & age_num < 45 ~ "Growth Phase",
+    age_num >= 36 & age_num < 61 ~ "Peak Earning",
+    age_num >= 61~ "Retirement Transition",
+    TRUE ~ "Unknown")) %>%
+  mutate(career_stage_num = case_when(
+    career_stage == "Entry Level" ~ 1,
+    career_stage == "Growth Phase" ~ 2,
+    career_stage == "Peak Earning" ~ 3,
+    career_stage == "Retirement Transition" ~ 4))
+```
+
+Visually confirm the non-linear effects of career stage on income classification.
+
+```{r}
+# Group by career stage.
+
+career_stage_prop <- income %>%
+  group_by(career_stage, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(career_stage) %>%
+  mutate(prop = count / sum(count))
+
+# Generate plot.
+
+ggplot(career_stage_prop, aes(x = career_stage, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proportion of Income Classes by Career Stage",
+       x = "Career Stage",
+       y = "Proportion",
+       fill = "Income Class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+To capture this nonlinear effect, I will use a second-degree orthogonal polynomial transformation of the numeric career stage variable as `poly(career_stage_num, 2)`.  It will model both linear and quadratic trends while avoiding multicollinearity.
+
+This should improve numerical stability and interpretability of regression coefficients, especially when modeling non-monotonic relationships (e.g., mid-career income peaks followed by retirement declines).
+
+### Marital Status
+
+The marital status variable captures an individual's relationship status and is a categorical feature with the following levels:
+
+* Married-civ-spouse: Legally married and living with spouse,
+* Married-AF-spouse: Married to a spouse in the Armed Forces (rare),
+* Divorced: Legally separated after marriage,
+* Separated: Still legally married but not living together,
+* Widowed: Spouse has passed away, and
+* Never-married,
+
+```{r}
+marital_status <- income %>%
+  group_by(marital_status_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(marital_status, aes(x = forcats::fct_reorder(marital_status_cat, entries, .desc = TRUE), y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Marital Status",
+       x = "Marital Status",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(marital_status$entries) * 1.2)
+```
+
+Married-civ-spouse dominates at 46%.  Never-married follows at 33%.  The rest of the categories are smaller slices, but potentially behaviorally distinct.
+
+Marital status could be a strong socioeconomic signal when predicting income, e.g. married individuals may benefit from dual incomes or household stability.  Never-married or separated individuals might reflect different life stages or economic pressures.
+
+These categories are not ordinal, e.g. widowed or married is not more or less than divorced.
+
+Collapsing sparse categories may improve model stability and interpretability, e.g. married, non-traditional married, previously married, never married.
+
+### Marital Status Group
+
+Marital status group collapses sparse categories into broader groups for model stability and interpretability.
+
+```{r define_marital_group}
+income <- income %>%
+  mutate(marital_status_group = case_when(
+    marital_status_cat %in% c("Married-civ-spouse", "Married-AF-spouse") ~ "Married",
+    marital_status_cat %in% c("Divorced", "Separated", "Widowed") ~ "Previously-married",
+    marital_status_cat == "Never-married" ~ "Never-married",
+    TRUE ~ "Other"))
+
+# Group by marital group.
+
+income_by_marital_status_group <- income %>%
+  group_by(marital_status_group, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(marital_status_group) %>%
+  mutate(prop = count / sum(count))
+
+# Generate plot.
+
+ggplot(income_by_marital_status_group, aes(x = marital_status_group, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proportion of Income Classes by Marital Status Group",
+       x = "Marital Group",
+       y = "Proportion",
+       fill = "Income Class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Married individuals show the highest proportion of income earners in the `>50K` category. This suggests that marriage may correlate with financial stability, dual-income households, or career maturity.
+
+Never-married, Previously-married, and Other groups (e.g., separated, widowed) all lean heavily toward the `<=50K` category, indicating lower income prevalence.
+
+The "Other" group likely includes individuals facing economic disruption — such as separation or widowhood — which may explain the lower income proportions.
+
+### Hours Per Week
+
+Hours per week represents the number of hours an individual reports working per week in their primary job.
+
+```{r}
+hours_per_week <- income %>%
+  group_by(hours_per_week_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(hours_per_week, aes(x = hours_per_week_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Hours Per Week",
+       x = "Hours Per Week",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(hours_per_week$entries) * 1.2)
+```
+
+There is a prominent spike at 40 hours, which can be considered a classic full-time benchmark in the US.  It dominates the dataset, reflecting standard employment contracts.  There are smaller peaks at 20, 30, 50 and 60 hours, suggesting common part-time and overtime thresholds.  These are potentially tied to specific industries or roles.  The jagged, irregular tail hints at self-reported data or job-specific norms, e.g. self-employment or gig work.
+
+### Hours Group
+
+The hours group variable is a derived categorical feature that segments individuals based on their reported weekly work hours:
+
+* Underemployed: Works fewer than 30 hours per week,
+* Full-time: Works between 30 and 45 hours per week, and
+* Overtime: Works more than 45 hours per week.
+
+```{r define_hours_group}
+income <- income %>%
+  mutate(hours_group_cat = case_when(
+    hours_per_week_num < 30 ~ "Underemployed",
+    hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
+    hours_per_week_num > 45 ~ "Overtime"),
+    hours_group_num = case_when(
+      hours_group_cat == "Underemployed" ~ 1,
+      hours_group_cat == "Full-time" ~ 2,
+      hours_group_cat == "Overtime" ~ 3))
+```
+
+What is the proportion of high earners by hours group?
+
+```{r}
+income_by_hours_group <- income %>%
+  group_by(hours_group_cat, income_cat) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(hours_group_cat) %>%
+  mutate(prop = count / sum(count))
+  
+ggplot(income_by_hours_group, aes(x = hours_group_cat, y = prop, fill = income_cat)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  labs(
+    title = "Income Proportion by Hours Group",
+    x = "Hours Group",
+    y = "Proportion",
+    fill = "Income Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+The underemployed group is overwhelmingly low income and likely includes part-time, seasonal or precarious workers.  The full-time group is majority `<=$50k` but has a noticeable uptick in high earners.  This suggests that full-time work alone isn't a guarantee of higher income.  The overtime group has the most balanced distribution; it probably includes a mix of skilled labor, self-employed individuals and salaried workers with performance incentives.
+
+```{r}
+income <- income %>%
+  mutate(hours_group_cat = factor(hours_group_cat, 
+                                  levels = c("Underemployed", "Full-time", "Overtime"),
+                                  ordered = TRUE),
+         hours_group_num = factor(hours_group_num, ordered = TRUE))
+```
+
+## Education
+
+The education field in the income dataset is a categorical variable with 16 levels, ranging from `Preschool` through advanced degrees like `Doctorate` and `Prof-school`.
+
+```{r}
+education <- income %>%
+  group_by(education_num, education_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  arrange(education_num) %>%
+  mutate(percent = round(entries / sum(entries), 2),
+         education_cat = factor(education_cat, levels = unique(education_cat)))
+
+ggplot(education, aes(x = education_cat, y = entries)) +
+  geom_col(fill = "steelblue", color = "white") +
+  geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
+            vjust = -0.3, size = 3.0) +
+  labs(title = "Distribution of Education",
+       x = "Education",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(education$entries) * 1.2)
+```
+
+High school graduates dominate the sample at 32%; this aligns with national trends.  The some-college a bachelors categories together make up 40% of the sample, indicating strong representation.  Advanced degrees are relatively rare; combined they account for ~7% of the sample, which could limit model ability to generalize to highly educated groups.  Low education levels are sparse; these are likely to be older adults or immigrants with limited formal schooling.
+
+Plot income proportions by education.
+
+```{r}
+# Group by education.
+
+income_by_education <- income %>%
+  group_by(education_cat, education_num, income_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  group_by(education_cat) %>%
+  mutate(prop = entries / sum(entries))
+
+# Plot summary.
+
+ggplot(income_by_education, 
+       aes(x = forcats::fct_reorder(education_cat, education_num), 
+           y = prop, 
+           fill = income_cat)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Income Proportion by Education Level",
+       x = "Education Level",
+       y = "Proportion of Income Category",
+       fill = "Income") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+There's an unmistakable pattern evident in this chart: the gradient from low education levels to advanced degrees is a textbook example of socioeconomic stratification.  Still its surprising to see how nonlinear the education payoff is in income potential.
+
+High income really starts to dominate at the Bachelor level and is an inflection point for income potential.  Advanced degrees show the highest income potential, but this comes with investment of time and potentially debt as well.
+
+I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_group` variable for this as part of transformations.
+
+### Education Group
+
+I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.
+
+```{r define_education_level_cat}
+
+income <- income %>%
+  mutate(education_group = case_when(
+            education_cat %in% c("Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
+                                 "10th", "11th", "12th") ~ "Non-HS",
+            education_cat %in% c("HS-grad", "Some-college", 
+                                 "Assoc-voc", "Assoc-acdm") ~ "HS/Some College",
+            education_cat %in% c("Bachelors") ~ "Bachelors",
+            education_cat %in% c("Masters") ~ "Masters",
+            education_cat %in% c("Prof-school", "Doctorate") ~ "Prof/Doctorate"),
+         education_group_num = case_when(
+           education_group == "Non-HS" ~ 1,
+           education_group == "HS/Some College" ~ 2,
+           education_group == "Bachelors" ~ 3,
+           education_group == "Masters" ~ 4,
+           education_group == "Prof/Doctorate" ~ 5))
+
+income <- income %>%
+  mutate(education_group = factor(education_group, 
+                                  levels = c("Non-HS", "HS/Some College", "Bachelors", 
+                                             "Masters", "Prof/Doctorate"),
+                                  ordered = TRUE),
+         education_group_num = factor(education_group_num, ordered = TRUE))
+```
+
+```{r}
+
+income_by_education_group <- income %>%
+  group_by(education_group, education_group_num, income_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  group_by(education_group_num) %>%
+  mutate(prop = entries / sum(entries))
+
+# Plot summary.
+
+ggplot(income_by_education_group, 
+       aes(x = education_group, 
+           y = prop, 
+           fill = income_cat)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Income Proportion by Education Level",
+       x = "Education Level",
+       y = "Proportion of Income Category",
+       fill = "Income") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Capital Gain/Loss
+
+In the UCI Adult Income dataset, the capital gain and capital loss variables don’t represent individual investment transactions like you’d see in a brokerage account. Instead, they are annual amounts reported on tax returns.
+
+Here’s what they represent in practice:
+
+**Capital Gain:** The total taxable profit someone reported in a year from selling assets (stocks, bonds, property, etc.) for more than they paid. A nonzero value suggests the person had some investment activity.
+
+**Capital Loss:** The total deductible loss someone reported in a year from selling assets for less than they paid. Tax rules allow limited reporting of such losses.
+
+In the dataset, most people have zeros for both variables, meaning they didn’t report any gains or losses that year. Nonzero values are relatively rare but signal engagement with investment activity beyond wages.
+
+### Limitation of Capital Gain/Loss as a Predictors
+
+While capital gain and capital loss provide useful signals of investment activity, they capture only realized transactions (profits or losses from assets actually sold). They do not account for asset ownership or wealth holdings that have not been sold.  For example, someone may hold significant investments in real estate or retirement accounts but report zero gains or losses if they did not sell anything that year. 
+
+This means the variables reflect investment activity, not necessarily investment capacity or wealth accumulation.
+
+### Capital Gain
+
+```{r}
+capital_gain <- income %>%
+  group_by(capital_gain_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(capital_gain, aes(x = capital_gain_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Capital Gain",
+       x = "Capital Gain",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(capital_gain$entries) * 1.2)
+```
+
+Both capital gain and loss are heavily zero-inflated, and that skew makes them prime candidates for binary transformation. Here's a breakdown of why and how to do it:
+
+Sparse signal: Most individuals have zero capital gain/loss, so the continuous values only apply to a small subset.
+
+Model stability: Continuous skewed variables can distort coefficients or inflate variance in linear models.
+
+Behavioral clarity: A binary flag captures the presence of investment activity, which may correlate with income or occupation.
+
+```{r}
+capital_gain %>%
+  arrange(capital_gain_num) %>%
+  mutate(cumulative = cumsum(entries) / sum(entries)) %>%
+  ggplot(aes(x = capital_gain_num, y = cumulative)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Cumulative Distribution of Capital Gain",
+       x = "Capital Gain",
+       y = "Cumulative Proportion") +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+The cumulative distribution shows that over 92% of individuals report zero or minimal capital gains, with only a small fraction earning substantial amounts (e.g., >10,000).
+
+Capital gain is a strong signal of financial activity and wealth accumulation, but it's concentrated among a small subset of the population.
+
+### Capital Loss
+
+```{r}
+capital_loss <- income %>%
+  group_by(capital_loss_num) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(capital_loss, aes(x = capital_loss_num, y = entries)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Distribution of Capital Loss",
+       x = "Capital Loss",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  expand_limits(y = max(capital_loss$entries) * 1.2)
+```
+
+Capital loss is also heavily zero-inflated.
+
+```{r}
+capital_loss %>%
+  arrange(capital_loss_num) %>%
+  mutate(cumulative = cumsum(entries) / sum(entries)) %>%
+  ggplot(aes(x = capital_loss_num, y = cumulative)) +
+  geom_line(size = 1, color = "steelblue") +
+  labs(title = "Cumulative Distribution of Capital Loss",
+       x = "Capital Loss",
+       y = "Cumulative Proportion") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+
+```
+
+Over 96% of individuals report zero or minimal capital loss. A steep rise in the cumulative distribution between 1,000 and 2,000 suggests that most reported losses fall within this range. Very few individuals report losses above 2,000.
+
+Combining capital gain and capital loss into a single binary variable reduces two sparse, skewed variables into one binary flag. It preserves the signal that captures whether the individual has any investment-related income or loss. It is also easier to explain and visualize in behavioral segmentation or fairness audits.
+
+### Has Investment Activity
+
+Create a single investment activity flag using capital gain and capital loss.
+
+```{r define_has_investment_activity}
+income <- income %>%
+  mutate(has_investment_activity = if_else(capital_gain_num > 0 | capital_loss_num > 0, 1, 0),
+         has_investment_activity_cat = if_else(has_investment_activity == 0, "No", "Yes"))
+```
+
+Check distribution of the variable.
+
+```{r}
+investment_by_income <- income %>%
+  group_by(has_investment_activity_cat, income_cat) %>%
+  summarise(entries = n()) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(investment_by_income, 
+       aes(x = has_investment_activity_cat, 
+           y = percent, 
+           fill = income_cat)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Income Proportion by Investment Activity",
+       x = "Investment  Activity",
+       y = "Proportion of Income Category",
+       fill = "Income") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        plot.title = element_text(size = 14, face = "bold"))
+```
+
+Individuals who do not engage in investment activity are predominantly in the `<=50K` income category.
+
+Those who do invest show a much higher proportion in the `>50K` category, suggesting that investment behavior correlates with higher earnings.
+
+Investment activity may reflect financial literacy, risk tolerance, or access to disposable income.
+
+It could also signal career stage or education level, since those with more resources and knowledge are more likely to invest.
+
+The plot shows a strong separation in income proportions based on investment behavior. Binary encoding preserves that contrast cleanly.
+
+Save data with features.
+
+```{r save_data_with_features}
+saveRDS(income, "../data/income_final.rds")
+```
+
+## Class Balance
+
+I will use class weighting in the training set to counteract the imbalance in the outcome classes (after splitting the income data). 
+
+This ensures performance metrics are meaningful for decision-making, while still allowing models to be tuned for sensitivity and accuracy where it matters most.
+
+# Split Data
+
+The dataset will be split into 60% training, 20% validation, and 20% test. This allocation provides enough data to train stable models while dedicating a higher-than-usual share to validation and testing. With a large dataset, this approach strengthens model comparison, improves tuning, and ensures that final performance metrics are based on a robust and representative holdout set.
+
+```{r split_data}
+income <- readRDS("../data/income_final.rds")
+
+set.seed(123)
+
+# Initial train/test split.
+
+train_idx <- createDataPartition(income$income_cat, p = 0.6, list = FALSE)
+
+train <- income[train_idx, ]
+
+temp  <- income[-train_idx, ]
+
+# Split remaining into validation/test.
+
+valid_idx <- createDataPartition(temp$income_cat, p = 0.5, list = FALSE)
+
+validation <- temp[valid_idx, ]
+
+test <- temp[-valid_idx, ]
+```
+
+Check class balance in the train, validation and test sets.
+
+```{r check_splits}
+check_balance <- function(df, name) {
+  df %>%
+    count(income_cat) %>%
+    mutate(prop = round(n / sum(n), 2),
+           dataset = name) %>%
+    select(dataset,
+           income_cat, 
+           n,
+           prop)
+}
+
+check <- bind_rows(check_balance(train, "Train"),
+                   check_balance(validation, "Validation"),
+                   check_balance(test, "Test"))
+
+kable(check,
+      col.names = c("Dataset", "Income Level", "Count", "Percent"),
+      caption = "Dataset Class Balance",
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r", "r"))
+```
+
+Use class weighting in the training set to counteract the imbalance in the outcome classes.
+
+```{r}
+# Calculate the proportion of each class in the training set.
+
+train_props <- prop.table(table(train$income_num))
+
+# Assign invserse frequency weights.
+
+train$weight <- ifelse(train$income_num == 1,
+                            1 / train_props["1"],
+                            1 / train_props["0"])
+
+# Normalize weights.
+
+train$weight <- train$weight / mean(train$weight)
+```
+
+Each row in train gets a numeric value in the weight variable such that:
+
+* Observations in the minority class (income_num == 1, typically >50K) receive higher weights, and
+* Observations in the majority class (income_num == 0, typically ≤50K) receive lower weights.
+
+The weights are normalized to have a mean of 1, so they don’t distort the overall scale of the model’s loss function.
+
+# Train Models
+
+## Linear Regression Indicator Matrix Model
+
+We begin by preparing the predictor matrix X, containing numeric representations of age, education, and marital status. The response variable, income, is coded as 0 (≤$50K) or 1 (>$50K). We convert it to a one-hot (indicator) matrix Y for the multivariate linear regression.
+
+A weight vector establishes class weights.
+
+```{r}
+train$marital_status_group <- factor(train$marital_status_group)
+
+# Prepare the predictor matrix.
+
+X <- model.matrix(~ poly(career_stage_num, 2) +
+                        marital_status_group +
+                        hours_group +
+                        education_group_num +
+                        has_investment_activity - 1, data = train)
+
+X <- X[, -which(colnames(X) == "marital_status_groupPreviously-married")]
+
+# Create indicator matrix for binary response
+
+G <- train$income_num  # Assumed to be 0/1
+
+Y <- model.matrix(~ factor(G) - 1)  # One-hot encoding
+
+# Class proportions.
+
+class_props <- prop.table(table(G))
+
+# Inverse frequency weights.
+
+weights_vec <- ifelse(G == 1,
+                      1 / class_props["1"],
+                      1 / class_props["0"])
+
+# Normalize weights.
+
+weights_vec <- weights_vec / mean(weights_vec)
+```
+
+A multivariate linear regression is fit with the one-hot encoded response matrix. This approach models the probability of each class as a linear combination of predictors.
+
+```{r}
+# fit the linear regression model and produce summary.
+
+model_linear_matrix <- lm(Y ~ X, weights = weights_vec)
+```
+
+We then produce model summaries.
+
+```{r}
+summary(model_linear_matrix)
+```
+
+The coefficients in factor(G)1 are exact negatives of those in factor(G)0.
+
+This makes sense because we are modeling the same binary outcome from opposite perspectives (0 vs. 1), and the linear predictions must sum to 1.
+
+Many predictors are highly significant (p < 2e-16), with large t-values.
+
+The marital status effect is striking: being married is associated with lower probability of factor(G)0 (likely low income), and higher probability of factor(G)1 (high income).
+
+Underemployment and overtime have opposite signs.
+
+Investment activity is a strong positive predictor of higher income classification, but could also reflect access or privilege.
+
+Using the fitted model, predict scores for each class. These predicted scores may fall outside the 0–1 range, which highlights the limitation of using linear regression for classification.
+
+```{r}
+# Predict class scores.
+
+pred <- predict(model_linear_matrix, newdata = data.frame(X))
+```
+
+For each observation, assign the class with the highest predicted score. We then recode it back to match the original binary labels (0 or 1).
+
+```{r}
+# Assign predicted class (1 or 2).
+
+class_pred <- max.col(pred)
+
+# Recode predicted class to match binary response (0/1).
+
+class_pred_binary <- ifelse(class_pred == 1, 0, 1)
+```
+
+Evaluate the predicted classes against the true labels using a confusion matrix.
+
+```{r}
+# Evaluate classification performance.
+
+cm_linear_matrix <- caret::confusionMatrix(factor(class_pred_binary), factor(train$income_num))
+
+cm_linear_matrix
+```
+
+Although we can produce predicted classes and metrics, the predicted probabilities from a linear model are not constrained to [0,1]. This can result in nonsensical probabilities, motivating the use of logistic regression for binary outcomes.
+
+### Extreme Probabilities
+
+The table below summarizes the number and percentage of predicted probabilities from the linear regression model that fall outside the valid 0–1 range for each class. As expected, linear regression applied to a binary outcome can produce estimates below 0 or above 1, highlighting a limitation of this approach for classification tasks.
+
+First, we extract the predicted probabilities for each class from the linear regression model. These probabilities represent the model’s estimated likelihood that each individual falls into the ≤$50K or >$50K income category.
+
+```{r}
+# Extract columns.
+
+prob_under50k <- pred[, "factor(G)0"]
+prob_over50k  <- pred[, "factor(G)1"]
+```
+
+To assess the appropriateness of linear regression for a binary outcome, we identify predictions that fall outside the valid probability range of 0 to 1. The table below shows the number and percentage of such predictions for each class.
+
+```{r}
+# Count out-of-bounds for each class.
+
+out_under <- sum(prob_under50k < 0 | prob_under50k > 1)
+out_over  <- sum(prob_over50k  < 0 | prob_over50k  > 1)
+total <- nrow(pred)
+
+# Summary table.
+
+check_summary <- data.frame(Cclass = c("<=50K", ">50K"),
+           out_of_bounds = c(out_under, out_over),
+           total = total,
+           percent_out_of_bounds = round(100 * c(out_under, out_over) / total, 2))
+
+kable(check_summary,
+      col.names = c("Class", "Out of Bounds", "Total", "Percent Out of Bounds"),
+      caption = "Out of Bounds Data for Each Class",       
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r", "r"))
+```
+
+The plot below illustrates the distribution of predicted probabilities for both income classes. The dashed red lines mark the valid 0–1 probability range. Any predictions beyond these boundaries are not interpretable as probabilities, demonstrating why logistic regression is generally preferred for binary classification problems.
+
+```{r}
+# Convert to long format.
+
+df_long <- as.data.frame(pred) %>%
+  pivot_longer(cols = everything(), names_to = "Class", values_to = "Probability")
+
+# Plot.
+
+ggplot(df_long, aes(x = Probability, fill = Class)) +
+  geom_histogram(bins = 50, color = "white", position = "dodge") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(
+    x = "Predicted Probability",
+    y = "Count",
+    title = "Distribution of Linear Regression Predicted Probabilities by Class"
+  ) +
+  scale_fill_manual(values = c("factor(G)0" = "steelblue", "factor(G)1" = "tomato")) +
+  theme_minimal()
+```
+
+Together, these outputs provide a numeric indication and clear visual of the constraints of using linear regression for a categorical outcome, setting the stage for comparison with the logistic regression model.
+
+### Generate ROC Curve and AUC Metric
+
+```{r}
+# Column 2 corresponds to class 1 (income_num == 1).
+
+score_class1 <- pred[, 2]
+
+roc_obj_lm <- pROC::roc(response = train$income_num, predictor = score_class1)
+
+# Plot ROC curve.
+
+plot(roc_obj_lm, col = "blue", lwd = 2, main = "ROC Curve for Indicator Regression")
+```
+
+The blue line bows confidently toward the top-left corner, which indicates high sensitivity and specificity across thresholds. The shape suggests an AUC in the high 0.7s to low 0.8s.
+
+The gray line represents random guessing. The model clearly outperforms this baseline, which confirms meaningful signal in the predictors.
+
+```{r}
+# AUC value.
+
+pROC::auc(roc_obj_lm)
+```
+
+This AUC score indicates that the model can distinguish between `>50K` and `<=50K` earners with nearly 89% accuracy across all thresholds.
+
+## Logistic Regression
+
+```{r}
+
+model_logistic <- glm(income_num ~ 
+                        poly(career_stage_num, 2) +
+                        marital_status_group +
+                        hours_group +
+                        education_group_num +
+                        has_investment_activity,
+                    data = train, weights = weight, family = "binomial")
+```
+
+Note on the non-integer warning message.  This message is triggered when using non-integer weights in a binomial glm(). The binomial family expects counts of successes and failures, and when weights are fractional, it assumes we are modeling aggregated binomial outcomes, which is not the case for this model.
+
+The warning is safe to ignore because I am using weights to adjust for class imbalance, not to model grouped binomial trials.  The response variable is binary and the weights are just importance weights, not trial counts.
+
+The model still fits correctly and returns valid coefficients, standard errors, and predictions.
+
+### Generate Model Summary
+
+```{r}
+summary(model_logistic)
+```
+
+### Generate ROC Curve and AUC Metric
+
+```{r}
+train$predicted_prob <- predict(model_logistic, type = "response")
+
+roc_obj_log <- pROC::roc(train$income_num, train$predicted_prob)
+
+plot(roc_obj_log, col = "blue", main = "ROC Curve for Logistic Regression")
+```
+
+```{r}
+pROC::auc(roc_obj_log)
+```
+
+### Generate Confusion Matrix
+
+
+
+```{r}
+threshold <- 0.5
+
+train$predicted_class <- ifelse(train$predicted_prob > 0.5, 1, 0)
+
+cm_logistic <- caret::confusionMatrix(factor(train$predicted_class), factor(train$income_num))
+
+cm_logistic
+```
+
+# Compare Models
+
+## Training Data
+
+### Confusion Matrix Comparison
+
+A side-by-side confusion matrices reveal how linear and logistic models differ in classification behavior.
+
+```{r}
+# Extract confusion matrix tables.
+
+cm_lm <- cm_linear_matrix$table
+cm_lg <- cm_logistic$table
+
+# Convert to data frames and add model labels.
+
+df_linear <- as.data.frame(cm_lm)
+df_linear$model <- "Linear"
+
+df_logistic <- as.data.frame(cm_lg)
+df_logistic$model <- "Logistic"
+
+# Combine both into one tidy data frame.
+
+df_combined <- rbind(df_linear, df_logistic)
+
+# Rename columns for clarity.
+
+colnames(df_combined) <- c("Predicted", "Actual", "Count", "Model")
+
+# Add TP/FP/TN/FN label.
+
+df_combined$Label <- with(df_combined, ifelse(
+  Predicted == 1 & Actual == 1, "TP",
+  ifelse(Predicted == 1 & Actual == 0, "FP",
+  ifelse(Predicted == 0 & Actual == 0, "TN",
+  "FN"))))
+
+# Reorder columns for clarity.
+
+df_final <- df_combined[, c("Model", "Predicted", "Actual", "Label", "Count")]
+
+# View result.
+
+kable(df_final,
+      col.names = c("Model", "Predicted", "Actual", "Label", "Count"),
+      caption = "Confusion Matrix Comparison",       
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r", "r", "r"))
+```
+
+Observations from this comparison:
+
+* Both models correctly identified ~4,000 high-income cases,
+* The logistic model made fewer incorrect high-income predictions,
+* The linear model is slightly better at catching true high-income cases, and
+* The logistic model is better at correctly identifying low-income cases.
+
+So the linear model leans slightly towards sensitivity, which may be preferred in situations where missing a true positive has a higher cost, e.g. when determining eligibility for benefits or financial services.
+
+The logistic model shows better specificity, reducing the risk of overextending resources or misclassifying ineligible individuals.
+
+### Performance Metric Comparison
+
+To assess model performance beyond raw classification counts, we compare key evaluation metrics from linear and logistic regression, including accuracy, sensitivity, specificity, and predictive values.
+
+```{r}
+# Extract metrics from both slots.
+
+overall_linear <- cm_linear_matrix$overall
+byclass_linear <- cm_linear_matrix$byClass
+
+overall_logistic <- cm_logistic$overall
+byclass_logistic <- cm_logistic$byClass
+
+# Select key metrics.
+
+metrics_overall <- c("Accuracy", "Kappa")
+metrics_byclass <- c("Sensitivity", "Specificity", "Pos Pred Value", "Neg Pred Value", "Balanced Accuracy")
+
+# Build data frame.
+
+df_metrics <- data.frame(Metric = c(metrics_overall, 
+                                    metrics_byclass),
+                         Linear = round(c(overall_linear[metrics_overall], 
+                                          byclass_linear[metrics_byclass]), 4),
+                         Logistic = round(c(overall_logistic[metrics_overall], 
+                                            byclass_logistic[metrics_byclass]), 4),
+                         row.names = NULL)
+
+# View result.
+
+kable(df_metrics,
+      col.names = c("Metric", "Linear", "Logistic"),
+      caption = "Model Metric Comparison",       
+      format.args = list(big.mark = ","),
+      align = c("l", "r", "r"))
+```
+
+While both models perform similarly, the logistic regression model offers a slight edge in overall accuracy, sensitivity, and balanced performance.  This makes it a more reliable choice when both false positives and false negatives carry meaningful consequences.
+
+**Accuracy:** The logistic model shows slightly higher accuracy (0.7875 versus 0.7747).
+
+**Kappa (Agreement Beyond Chance):** The logistic model shows better agreement beyond chance (0.5084 versus 0.4962), indicating modest overall improvement in classification consistency.  Kappa in the range of 0.4-0.6 is considered moderate agreement beyond chance.  While the models are better than chance based on this metric, they may not be capturing all the complexity in the data.
+
+**Sensitivity (true positive rate):** Higher for logistic (0.7592), meaning it better identifies actual positives.
+
+**Specificity (true negative rate):** Marginally higher for linear (0.8589), indicating slightly better performance in ruling out false positives.
+
+**Positive Predictive Value:** Nearly identical (~0.943), showing both models are highly reliable when predicting the majority class.
+
+**Negative Predictive Value:** Slightly better in the logistic model (0.5300 vs. 0.5195), suggesting improved confidence in minority class predictions.
+
+**Balanced Accuracy:** Logistic edges out linear (0.8076 vs. 0.8034), reflecting a more equitable performance across both classes.
+
+### AUC Comparison (Versus Accuracy and Kappa)
+
+AUC measures how well a model ranks positives above negatives across all thresholds. It’s threshold-agnostic and robust to class imbalance. Accuracy is threshold-dependent and can be misleading if one class dominates. Kappa adjusts accuracy for chance agreement, but still depends on a fixed threshold.
+
+AUC tells us how well the models discriminate, not just how often it’s “right” at a single cutoff. This is especially useful when comparing models with similar accuracy but different ranking behavior.
+
+```{r}
+# Extract AUCs.
+
+auc_lm   <- pROC::auc(roc_obj_lm)
+auc_log  <- pROC::auc(roc_obj_log)
+
+# Create comparison data frame.
+
+auc_comparison <- data.frame(Model = c("Linear", "Logistic"),
+                             AUC = c(auc_lm, auc_log))
+
+# View result.
+
+kable(auc_comparison,
+      col.names = c("Model", "AUC"),
+      caption = "AUC Comparison",       
+      format.args = list(big.mark = ","),
+      align = c("l", "r"))
+```
+
+These are nearly identical, suggesting both models rank cases similarly, and the logistic model has a slightly higher value.
+
+At 0.88, these models have very good discrimination, separating high-income from low-income individuals across thresholds.
+
+### Coefficient Comparison
+
+```{r}
+model_G0 <- model_linear_matrix$coefficients[, "factor(G)0"]
+model_G1 <- model_linear_matrix$coefficients[, "factor(G)1"]
+
+# Add names to preserve predictor labels
+names(model_G0) <- rownames(model_linear_matrix$coefficients)
+names(model_G1) <- rownames(model_linear_matrix$coefficients)
+
+
+coef_df <- compare_model_coefficients(
+  G0 = model_G0,
+  G1 = model_G1,
+  logistic = model_logistic
+)
+
+head(coef_df)
+```
+
+Visualize coefficient estimates with error bars...
+
+```{r}
+ggplot(coef_df, aes(x = predictor, y = Estimate, color = model)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  geom_errorbar(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`),
+                position = position_dodge(width = 0.5), width = 0.2) +
+  coord_flip() +
+  labs(title = "Coefficient Estimates with Standard Errors",
+       x = "Predictor", y = "Estimate") +
+  theme_minimal()
+
+```
+
+P-value heatmap...
+
+```{r}
+ggplot(coef_df, aes(x = predictor, y = model, fill = p_value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "darkred", high = "white", trans = "log", name = "p-value") +
+  labs(title = "P-Value Comparison Across Models",
+       x = "Predictor", y = "Model") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Faceted coefficient plot by model...
+
+```{r}
+ggplot(coef_df, aes(x = Estimate, y = reorder(predictor, Estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = Estimate - `Std. Error`, xmax = Estimate + `Std. Error`), height = 0.2) +
+  facet_wrap(~ model, scales = "free_x") +
+  labs(title = "Model Coefficients by Predictor",
+       x = "Estimate", y = "Predictor") +
+  theme_minimal()
+
+```
+
+### Residual Comparison
+
+Where do the linear predictions overshoot? Are they concentrated in certain subgroups?
+
+```{r}
+resid_df <- compare_model_residuals(
+  #linear = lin_mod,
+  logistic = model_logistic
+)
+
+head(resid_df)
+
+```
+
+Visualize residuals...
+
+```{r}
+ggplot(resid_df, aes(x = fitted, y = residual, color = model)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted", y = "Residual")
+```
+
+### Fairness stratification
+
+Compare performance by race, gender, relationship role — does one model generalize better across strata?
+
+## Validation Data
+
+### Linear Regression with an Indicator Matrix
+
+Prepare the validation predictor matrix.
+
+```{r}
+# Ensure factor levels match training.
+
+validation$marital_status_group <- factor(validation$marital_status_group,
+                                     levels = levels(train$marital_status_group))
+
+# Build validation design matrix.
+
+X_valid <- model.matrix(~ poly(career_stage_num, 2) +
+                          marital_status_group +
+                          hours_group +
+                          education_group_num +
+                          has_investment_activity - 1,
+                        data = validation)
+
+# Drop the same column as in training.
+
+drop_col <- "marital_status_groupPreviously-married"
+
+if (drop_col %in% colnames(X_valid)) {
+  X_valid <- X_valid[, colnames(X_valid) != drop_col, drop = FALSE]
+}
+
+G_valid <- validation$income_num  # Binary outcome: 0 or 1
+
+Y_valid <- model.matrix(~ factor(G_valid) - 1)  # One-hot encoding
+```
+
+```{r}
+# Remove leading "X" from coefficient row names
+expected_cols <- sub("^X", "", rownames(model_linear_matrix$coefficients))
+
+# Get actual column names from validation matrix
+actual_cols <- colnames(X_valid)
+
+# Create aligned matrix with zeros for missing columns
+X_valid_aligned <- matrix(0, nrow = nrow(X_valid), ncol = length(expected_cols),
+                          dimnames = list(rownames(X_valid), expected_cols))
+
+# Fill in matching columns
+common_cols <- intersect(expected_cols, actual_cols)
+X_valid_aligned[, common_cols] <- X_valid[, common_cols]
+
+```
+
+```{r}
+expected_cols <- rownames(model_linear_matrix$coefficients)
+actual_cols <- colnames(X_valid_aligned)
+
+# See which expected columns are missing
+setdiff(expected_cols, actual_cols)
+
+```
+
+Align validation matrix and predict.
+
+```{r}
+# Predict probabilities
+pred_probs <- X_valid_aligned %*% model_linear_matrix$coefficients
+
+# Predict class labels
+pred_class <- apply(pred_probs, 1, function(row) which.max(row) - 1)
+
+```
+
+
+Evaluate the predicted classes against the true labels using a confusion matrix.
+
+```{r}
+# Evaluate classification performance.
+# Rename predicted class vector
+class_pred_binary <- pred_class  # from apply(... which.max(row) - 1)
+
+# Compute confusion matrix
+library(caret)
+cm_linear_matrix <- caret::confusionMatrix(
+  factor(class_pred_binary),
+  factor(validation$income_num),
+  positive = "1"  # or "0", depending on which class you want as positive
+)
+
+# View results
+cm_linear_matrix
+
+```
+
+### Logistic Regression
+
+
+
+# Choose Final Model
+
+# Retrain Final Model
+
+# Evaluate Model
+
+# Final Analysis
+
+## Conclusions
+
+## Challenges and Solutions
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

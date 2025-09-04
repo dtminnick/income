@@ -76,6 +76,9 @@ library("ggplot2")
 library("knitr")
 library("pROC")
 library("tidyr")
+
+source("../R/compare_model_coefficients.R")
+source("../R/compare_model_residuals.R")
 ```
 
 # Exploratory Data Analysis (Summary)
@@ -183,8 +186,37 @@ income <- income %>%
     age_num < 31 ~ "Entry Level",
     age_num >= 21 & age_num < 45 ~ "Growth Phase",
     age_num >= 36 & age_num < 60 ~ "Peak Earning",
-    age_num >= 61~ "Retirement Transition ",
-    TRUE ~ "Unknown"))
+    age_num >= 61~ "Retirement Transition",
+    TRUE ~ "Unknown")) %>%
+  mutate(career_stage_num = case_when(
+    career_stage == "Entry Level" ~ 1,
+    career_stage == "Growth Phase" ~ 2,
+    career_stage == "Peak Earning" ~ 3,
+    career_stage == "Retirement Transition" ~ 4))
+```
+
+```{r}
+model_cs <- glm(income_num ~ career_stage_num, data = income, family = binomial)
+
+income$predicted_prob <- predict(model_cs, type = "response")
+
+```
+
+```{r}
+ggplot(income, aes(x = career_stage, y = income_num)) +
+  geom_boxplot() +
+  labs(title = "Income vs Career Stage", y = "High Income (1 = >50K)", x = "Career Stage")
+
+```
+
+```{r}
+ggplot(income, aes(x = career_stage_num, y = predicted_prob)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "darkred") +
+  scale_x_continuous(breaks = 1:4, labels = c("Early", "Mid", "Peak", "Transition")) +
+  labs(title = "Predicted Probability of High Income by Career Stage",
+       x = "Career Stage", y = "Predicted Probability") +
+  theme_minimal()
 ```
 
 ### Workclass Group
@@ -202,21 +234,25 @@ income <- income %>%
     TRUE ~ "Other"))
 ```
 
-### Education Level (Ordinal Coding)
+### Education Group
 
 I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.  See **Appendices | Appendix A: Exploratory Data Analysis | Education** section for rationale.
 
 ```{r define_education_level_cat}
-education_levels <- c(
-  "Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
-  "10th", "11th", "12th", "HS-grad", "Some-college", 
-  "Assoc-voc", "Assoc-acdm", "Bachelors", "Masters", 
-  "Prof-school", "Doctorate")
 
 income <- income %>%
-  mutate(education_level_cat = factor(education_cat, 
-                                      levels = education_levels, 
-                                      ordered = TRUE))
+  mutate(education_group = case_when(
+    education_cat %in% c("Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
+                         "10th", "11th", "12th") ~ "Non-HS",
+    education_cat %in% c("HS-grad", "Some-college", 
+                         "Assoc-voc", "Assoc-acdm") ~ "HS/Some College",
+    education_cat %in% c("Bachelors") ~ "Bachelors",
+    education_cat %in% c("Masters") ~ "Masters",
+    education_cat %in% c("Prof-school", "Doctorate") ~ "Prof/Doctorate",
+  ))
+
+income <- income %>%
+  mutate(education_group = factor(education_group, ordered = TRUE))
 ```
 
 ### Years of Education
@@ -565,18 +601,31 @@ print(auc_value)
 ## Logistic Regression
 
 ```{r}
+# model_logistic <- glm(income_num ~ 
+#                         age_num + 
+#                         #workclass_num + 
+#                         education_num + 
+#                         marital_status_num,
+#                         #hours_per_week_num + 
+#                         #relationship_num + 
+#                         #race_num + 
+#                         #gender_num + 
+#                         #capital_gain_num + 
+#                         #capital_loss_num, 
+#                       data = train, family = "binomial")
+
 model_logistic <- glm(income_num ~ 
-                        age_num + 
-                        #workclass_num + 
-                        education_num + 
-                        marital_status_num,
-                        #hours_per_week_num + 
-                        #relationship_num + 
-                        #race_num + 
-                        #gender_num + 
-                        #capital_gain_num + 
-                        #capital_loss_num, 
-                      data = train, family = "binomial")
+                        career_stage +
+                        workclass_group_cat +
+                        education_level_cat +
+                        marital_status_group +
+                        occupation_group +
+                        hours_group +
+                        relationship_role +
+                        race_income_score +
+                        has_investment_activity +
+                        is_us_native,
+                    data = train, family = "binomial")
 ```
 
 ### Generate Model Summary
@@ -637,6 +686,111 @@ list(confusion = confusion,
 # Compare Models
 
 ## Training Data
+
+### Performance Metrics
+
+Metric	Linear	Logistic	Notes
+Accuracy	0.8386	0.8379	Nearly identical — both models generalize well
+Sensitivity	0.9264	0.9377	Logistic slightly better at detecting >50K earners
+Specificity	0.5733	0.5362	Linear better at identifying ≤50K earners
+AUC	0.8965	0.8913	Linear edges out logistic — rare but possible when features are well-behaved
+
+That ~22% of linear predictions falling outside the probability range is expected: Linear regression doesn’t constrain outputs, so values <0 or >1 are possible. These can be truncated or thresholded, but they’re not probabilistically valid.
+
+Logistic regression naturally bounds predictions between 0 and 1 via the sigmoid function.
+
+Still, linear model’s AUC and sensitivity suggest it’s capturing the signal remarkably well.
+
+Indicator matrix is well-structured and behaviorally grounded.
+
+Linear regression may be a viable alternative for interpretability, especially in fairness audits or when logistic assumptions don’t hold.
+
+### Coefficient Comparison
+
+```{r}
+model_G0 <- fit$coefficients[, "factor(G)0"]
+model_G1 <- fit$coefficients[, "factor(G)1"]
+
+# Add names to preserve predictor labels
+names(model_G0) <- rownames(fit$coefficients)
+names(model_G1) <- rownames(fit$coefficients)
+
+
+coef_df <- compare_model_coefficients(
+  G0 = model_G0,
+  G1 = model_G1,
+  logistic = model_logistic
+)
+
+head(coef_df)
+```
+
+Visualize coefficient estimates with error bars...
+
+```{r}
+ggplot(coef_df, aes(x = predictor, y = Estimate, color = model)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  geom_errorbar(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`),
+                position = position_dodge(width = 0.5), width = 0.2) +
+  coord_flip() +
+  labs(title = "Coefficient Estimates with Standard Errors",
+       x = "Predictor", y = "Estimate") +
+  theme_minimal()
+
+```
+
+P-value heatmap...
+
+```{r}
+ggplot(coef_df, aes(x = predictor, y = model, fill = p_value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "darkred", high = "white", trans = "log", name = "p-value") +
+  labs(title = "P-Value Comparison Across Models",
+       x = "Predictor", y = "Model") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Faceted coefficient plot by model...
+
+```{r}
+ggplot(coef_df, aes(x = Estimate, y = reorder(predictor, Estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = Estimate - `Std. Error`, xmax = Estimate + `Std. Error`), height = 0.2) +
+  facet_wrap(~ model, scales = "free_x") +
+  labs(title = "Model Coefficients by Predictor",
+       x = "Estimate", y = "Predictor") +
+  theme_minimal()
+
+```
+
+### Residual analysis
+
+Where do the linear predictions overshoot? Are they concentrated in certain subgroups?
+
+```{r}
+resid_df <- compare_model_residuals(
+  #linear = lin_mod,
+  logistic = model_logistic
+)
+
+head(resid_df)
+
+```
+
+Visualize residuals...
+
+```{r}
+ggplot(resid_df, aes(x = fitted, y = residual, color = model)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted", y = "Residual")
+```
+
+### Fairness stratification
+
+Compare performance by race, gender, relationship role — does one model generalize better across strata?
 
 ## Validation Data
 
@@ -727,6 +881,12 @@ ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income_cat)) +
 This plot shows that income probability doesn't increase linearly with age; rather, it peaks mid-career and then drops.  I'll use a binning strategy to model this non-monotonic pattern, i.e. instead of assuming that each year of age adds the same effect, binning allows me to treat age as a set of behavioral groups.  
 
 I'll engineer a `career_stage` feature with four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60, and 4) retirement transition (ages 61+).
+
+To capture non-linear effects of career stage on income classification, we included a second-degree orthogonal polynomial transformation of the numeric career stage variable.  It will model both linear and quadratic trends while avoiding multicollinearity.
+
+We will implement it as `poly(career_stage_num, 2)` when modeling to generate two statistically independent predictors, a linear component (career stage) and a curvature component (career stage squared).
+
+This should improve numerical stability and interpretability of regression coefficients, especially when modeling non-monotonic relationships (e.g., mid-career income peaks followed by retirement declines).
 
 ### Workclass
 
@@ -837,6 +997,12 @@ Plot income proportions by education.
 
 ```{r}
 
+income_by_education <- income %>%
+  group_by(education_cat, education_num, income_cat) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  group_by(education_cat) %>%
+  mutate(prop = entries / sum(entries))
+
 # Step 1: Count income levels per education
 edu_order <- edu_income %>%
   filter(income_cat == ">50K") %>%
@@ -850,7 +1016,7 @@ edu_income <- edu_income %>%
 
 
 # Step 3: Plot
-ggplot(edu_income, aes(x = education_cat, y = prop, fill = income_cat)) +
+ggplot(income_by_education, aes(x = forcats::fct_reorder(education_cat, education_num), y = prop, fill = income_cat)) +
   geom_bar(stat = "identity", position = "stack") +
   scale_y_continuous(labels = scales::percent_format()) +
   labs(
@@ -861,9 +1027,6 @@ ggplot(edu_income, aes(x = education_cat, y = prop, fill = income_cat)) +
   ) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-
 ```
 
 There's an unmistakable pattern evident in this chart: the gradient from low education levels to advanced degress is a textbook example of socioecomonic stratification.  Still its surprising to see how nonlinear the payoff is.
@@ -1232,15 +1395,6 @@ capital_gain <- income %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
 
-
-kable(capital_gain,
-      col.names = c("Capital Gain", "Entries", "Percent"),
-      caption = "Capital Gain",
-      format.args = list(big.mark = ","),
-      align = c("l", "r", "r"))
-```
-
-```{r}
 ggplot(capital_gain, aes(x = capital_gain_num, y = entries)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Distribution of Capital Gain",
