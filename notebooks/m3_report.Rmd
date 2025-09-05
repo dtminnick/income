@@ -1,5 +1,5 @@
 ---
-title: "Predicting Income Level from Career Stage, Education Level, and Investment Activity"
+title: "Predicting Income Level from Demographic and Behavioral Variables"
 subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic Regression Approaches"
 author: "Donnie Minnick, Statistical Learning - Fall A 2025"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
@@ -21,13 +21,13 @@ This project evaluates two modeling approaches, linear regression with an indica
 
 Using the UCI Adult Income dataset, the comparison focuses on career stage, education level, and investment activity as the explanatory variables.
 
-I compare model performance using practical measures, including accuracy, sensitivity, specificity, and AUC. 
+I compare model performance using practical measures, including accuracy, sensitivity, specificity, and Area Under the ROC Curve (AUC). 
 
 My goal is to identify the method that not only provides stronger predictive capability but also offers clearer insight into how these three dimensions of socioeconomic behavior and opportunity contribute to income differences.
 
 ## Analysis Question
 
-How do linear regression with an indicator matrix and logistic regression compare in their ability to classify individuals as earning above or below $50,000 per year, based on career stage, education level, and investment activity, in terms of accuracy, sensitivity, specificity, and AUC?
+How do linear regression with an indicator matrix and logistic regression compare in their ability to classify individuals as earning above or below $50,000 per year, based on career stage, education level, and investment activity and other demographic and behavioral variables, in terms of accuracy, sensitivity, specificity, and AUC?
 
 ## Data Suitability
 
@@ -35,9 +35,9 @@ The UCI Adult Income dataset is well suited for this analysis based on the follo
 
 **Binary Target Variable:** The income label is already dichotomized as `<=50K` and `>50K`, making it ideal for classification tasks.
 
-**Relevant Predictors:** Career stage can be proxied through variables such as age, occupation, and years of work experience. Education level is directly available in multiple forms (years of education and categorical attainment). And investment activity can be approximated through features like capital gains and capital losses, which provide signals of financial activity beyond earned income.
+**Relevant Predictors:** Career stage can be proxied through variables such as age, occupation, and years of work experience. Education level is directly available in multiple forms (years of education and categorical attainment). And investment activity can be approximated through features like capital gains and capital losses, which provide signals of financial activity beyond earned income.  Marital status and hours worked provide a view into socioeconomic dynamics influencing income level.
 
-**Mixed Data Types:** These predictors combine categorical (education level, occupation) and continuous (capital gains, capital losses, age) data, allowing a comparison of how well each modeling method handles different variable types.
+**Mixed Data Types:** These predictors combine categorical (education level, marital status, occupation) and continuous (capital gains, capital losses, age) data, allowing a comparison of how well each modeling method handles different variable types.
 
 **Real-World Relevance:** The selected variables represent core levers of socioeconomic advancement, human capital (education), labor market position (career stage), and financial behavior (investment activity). Evaluating their relationship to income provides insights into drivers of upward mobility.
 
@@ -73,11 +73,13 @@ The UCI Adult Income dataset and related information are available for download 
 
 ## Code Libraries
 
-My analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` and 'tidyr' for data manipulation, `ggplot2` for plots, `knitr` for table formatting, and `pROC` for ROC/AUC analysis.
+My analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` and `tidyr` for data manipulation, `ggplot2` for plots, `knitr` for table formatting, and `pROC` for ROC/AUC analysis.
 
-Two customized R functions enable comparison of model coefficients and residuals.
+Customized R functions enable comparison of model coefficients and residuals, evaluation of predictor associations and multicollinearity checks.
 
-```{r, load_libraries, echo = FALSE, message = FALSE}
+Code chunks are presented in this R markdown document alongside analysis to document implementation of analysis, model creation, and evaluation.
+
+```{r, load_libraries}
 library("caret")
 library("dplyr")
 library("ggplot2")
@@ -87,6 +89,8 @@ library("tidyr")
 
 source("../R/compare_model_coefficients.R")
 source("../R/compare_model_residuals.R")
+source("../R/check_multicollinearity_factors.R")
+source("../R/test_predictor_associations.R")
 ```
 
 # Data Exploration, Cleaning and Transformation
@@ -97,21 +101,19 @@ Load the income data and select in-scope variables.
 
 ```{r load_data}
 income <- readRDS("../data/income.rds") %>%
-  select(income_cat, 
-         income_num, 
-         age_num,
-         marital_status_cat,
-         marital_status_num,
-         hours_per_week_num,
-         education_cat, 
-         education_num, 
-         capital_gain_num, 
-         capital_loss_num)
+  select(income, 
+         age,
+         marital_status,
+         hours_per_week,
+         education, 
+         capital_gain, 
+         capital_loss) %>%
+  mutate(income_num = if_else(income == "<=50K", 0, 1))
 ```
 
 ## Missing Values
 
-This code generates a report summarizing missing values in the dataset at both the column and row level. Then, it computes the total number and percentage of rows containing any missing values. Finally, the two summaries are combined into a single table for easy inspection and reporting.
+Generates a report summarizing missing values in the dataset at both the column and row level. Compute the total number and percentage of rows containing any missing values. And combine summaries into a single table for easy inspection and reporting.
 
 ```{r missing_data}
 # Create column level summary.
@@ -121,13 +123,13 @@ col_missing <- income %>%
   pivot_longer(cols = everything(),
                names_to = "variable",
                values_to = "missing_count") %>%
-  mutate(missing_percent = missing_count / nrow(income) * 100)
+  mutate(missing_percent = round(missing_count / nrow(income), 2))
 
 # Create row level summary.
 
 row_missing <- tibble(variable = "rows_with_missing_data",
                       missing_count = sum(!complete.cases(income)),
-                      missing_percent = sum(!complete.cases(income)) / nrow(income) * 100)
+                      missing_percent = round(sum(!complete.cases(income)) / nrow(income), 2))
 
 # Combine summaries.
 
@@ -137,28 +139,27 @@ missing_report <- bind_rows(col_missing, row_missing)
 
 kable(missing_report,
       col.names = c("Variable", "Missing Count", "Missing Percent"),
-      caption = "Missing Data",
       format.args = list(big.mark = ","),
       align = c("l", "r", "r"))
 ```
 
 The table confirms there are no rows with missing data in the reported rows and columns.  The source dataset contains 32,560 observations.
 
-## Income (Response Variable)
+## Income (Response)
 
-`income_cat` is a binary categorical variable indicating whether an individual's annual income exceeds $50,000. It has two levels: `<=50K` for those earning $50,000 or less, and `>50K` for those earning more than $50,000.  `income_num` is a numeric variable that corresponds to `income_cat`, i.e. 0 represents the `<=50k` category and 1 represents the `>50k` category.
+`income` is a binary categorical variable indicating whether an individual's annual income exceeds $50,000. It has two levels: `<=50K` for those earning $50,000 or less, and `>50K` for those earning more than $50,000.  `income_num` is a numeric variable that corresponds to `income_cat`, i.e. 0 represents the `<=50k` category and 1 represents the `>50k` category.
 
 ```{r eda_income}
 # Generate a summary of the income variable.
 
 income_summary <- income %>%
-  group_by(income_cat) %>%
+  group_by(income) %>%
   summarise(entries = n()) %>%
   mutate(percent = round(entries / sum(entries), 2))
 
 # Plot the distribution of values.
 
-ggplot(income_summary, aes(x = income_cat, y = entries)) +
+ggplot(income_summary, aes(x = income, y = entries)) +
   geom_col(fill = "steelblue", color = "white") +
   geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
             vjust = -0.3, size = 3.0) +
@@ -177,39 +178,41 @@ Given the potential baseline accuracy trap, i.e. because the `<=50K` class domin
 
 I need to also measure how well the models detect the minority class, ensure that I am not over-predicting the majority class, and generate models with overall discriminatory power.  I will use weights as a means to balance the classes before training the models.
 
+Encode factor levels for income, using `<=50K` as the reference level.
+
 ```{r}
 # Make response variable a factor.
 
 income <- income %>%
-  mutate(income_num = factor(income_num, levels = c(0, 1)))
+  mutate(income = factor(income, levels = c("<=50K", ">50K")),
+         income_num = factor(income_num, levels = c(0, 1)))
 ```
 
 ## Age
 
-`age_num` is a continuous numeric variable, ranging from 17 to 90.
+`age` is a continuous numeric variable, ranging from 17 to 90.  The following plot generates a summary of the `age` variable.
 
 ```{r}
 # Generate a summary of the age variable.
 
 age_summary <- income %>%
-  group_by(age_num) %>%
+  group_by(age) %>%
   summarise(entries = n()) %>%
   mutate(percent = round(entries / sum(entries), 2))
 
 # Plot the distribution of values.
 
-ggplot(age_summary, aes(x = age_num, y = entries)) +
-  geom_line(size = 1, color = "steelblue") +
+ggplot(age_summary, aes(x = age, y = entries)) +
+  geom_line(linewidth = 1, color = "steelblue") +
   labs(title = "Distribution of Age",
        x = "Age",
-       y = "Entries") +
+       y = "Count") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
-        plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(age_summary$entries) * 1.2)
+        plot.title = element_text(size = 14, face = "bold"))
 ```
 
-This distribution mirrors what you'd expect from a working-age population in the US: a peak around ages 20-30, reflecting a large cohort entering the workforce, a gradual decline beginning at age 37-38 through age 55, typical of aging out of peak earning years or shifting to preparation for retirement, and dropoff after ages 60-50, reflecting retirement and reduced representation.
+This distribution reflects what we'd expect from a working-age population in the US: a peak around ages 20-30, reflecting a large cohort entering the workforce, a gradual decline beginning at age 37-38 through age 55, typical of aging out of peak earning years or shifting to preparation for retirement, and dropoff after ages 60-50, reflecting retirement and reduced representation.
 
 Age is likely nonlinear in its relationship to income class.  Use binning to confirm this dynamic.
 
@@ -217,19 +220,19 @@ Age is likely nonlinear in its relationship to income class.  Use binning to con
 # Create age bins.
 
 income_age <- income %>%
-  mutate(age_bin = cut(age_num, breaks = seq(15, 90, by = 5), include.lowest = TRUE))
+  mutate(age_bin = cut(age, breaks = seq(15, 90, by = 5), include.lowest = TRUE))
 
 # Calculate proportions within each age bin and income group.
 
 age_income_prop <- income_age %>%
-  group_by(age_bin, income_cat) %>%
+  group_by(age_bin, income) %>%
   summarise(count = n(), .groups = "drop") %>%
   group_by(age_bin) %>%
   mutate(prop = count / sum(count))
 
 # Generate plot.
 
-ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income_cat)) +
+ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
@@ -249,20 +252,24 @@ This plot shows that income probability doesn't increase linearly with age; rath
 The `career_stage` feature will contain four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60), and 4) retirement transition (ages 61+).
 
 ```{r define_career_stage}
-# Create career_stage and career_stage_num variables.
+# Create career_stage variable.
 
 income <- income %>%
-  mutate(career_stage_cat = case_when(
-    age_num < 31 ~ "Entry Level",
-    age_num >= 21 & age_num < 45 ~ "Growth Phase",
-    age_num >= 36 & age_num < 61 ~ "Peak Earning",
-    age_num >= 61~ "Retirement Transition",
-    TRUE ~ "Unknown")) %>%
-  mutate(career_stage_num = case_when(
-    career_stage_cat == "Entry Level" ~ 1,
-    career_stage_cat == "Growth Phase" ~ 2,
-    career_stage_cat == "Peak Earning" ~ 3,
-    career_stage_cat == "Retirement Transition" ~ 4))
+  mutate(career_stage = case_when(
+    age < 31 ~ "Entry-level",
+    age >= 21 & age < 45 ~ "Growth-phase",
+    age >= 36 & age < 61 ~ "Peak-earning",
+    age >= 61~ "Retirement-transition"))
+
+# Make variable a factor.
+
+income <- income %>%
+  mutate(career_stage = factor(career_stage, 
+                               ordered = TRUE,
+                               levels = c("Entry-level", 
+                                          "Growth-phase", 
+                                          "Peak-earning", 
+                                          "Retirement-transition")))
 ```
 
 Visually confirm the non-linear effects of career stage on income classification.
@@ -271,14 +278,14 @@ Visually confirm the non-linear effects of career stage on income classification
 # Group by career stage.
 
 career_stage_prop <- income %>%
-  group_by(career_stage_cat, income_cat) %>%
+  group_by(career_stage, income) %>%
   summarise(count = n(), .groups = "drop") %>%
-  group_by(career_stage_cat) %>%
+  group_by(career_stage) %>%
   mutate(prop = count / sum(count))
 
 # Generate plot.
 
-ggplot(career_stage_prop, aes(x = career_stage_cat, y = prop, fill = income_cat)) +
+ggplot(career_stage_prop, aes(x = career_stage, y = prop, fill = income)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
@@ -293,6 +300,8 @@ ggplot(career_stage_prop, aes(x = career_stage_cat, y = prop, fill = income_cat)
 
 To capture this nonlinear effect, I will use a second-degree orthogonal polynomial transformation of the numeric career stage variable as `poly(career_stage_num, 2)`.  It will model both linear and quadratic trends while avoiding multicollinearity.
 
+There is a single inflection point in this distribution. The chart shows a rise in `>50K` income class from Entry-level to Peak-earning, followed by a decline in Retirement-transition. That’s a classic parabolic shape with one turning point which a quadratic models naturally.
+
 This should improve numerical stability and interpretability of regression coefficients, especially when modeling non-monotonic relationships (e.g., mid-career income peaks followed by retirement declines).
 
 ### Marital Status
@@ -300,19 +309,25 @@ This should improve numerical stability and interpretability of regression coeff
 The marital status variable captures an individual's relationship status and is a categorical feature with the following levels:
 
 * Married-civ-spouse: Legally married and living with spouse,
-* Married-AF-spouse: Married to a spouse in the Armed Forces (rare),
+* Married-AF-spouse: Married to a spouse in the armed forces,
 * Divorced: Legally separated after marriage,
 * Separated: Still legally married but not living together,
 * Widowed: Spouse has passed away, and
-* Never-married,
+* Never-married.
+
+Generate a summary of `marital_status`.
 
 ```{r}
-marital_status <- income %>%
-  group_by(marital_status_cat) %>%
+# Generate summary.
+
+marital_status_summary <- income %>%
+  group_by(marital_status) %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
 
-ggplot(marital_status, aes(x = forcats::fct_reorder(marital_status_cat, entries, .desc = TRUE), y = entries)) +
+# Plot distribution of values.
+
+ggplot(marital_status_summary, aes(x = forcats::fct_reorder(marital_status, entries, .desc = TRUE), y = entries)) +
   geom_col(fill = "steelblue", color = "white") +
   geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
             vjust = -0.3, size = 3.0) +
@@ -322,7 +337,7 @@ ggplot(marital_status, aes(x = forcats::fct_reorder(marital_status_cat, entries,
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(marital_status$entries) * 1.2)
+  expand_limits(y = max(marital_status_summary$entries) * 1.2)
 ```
 
 Married-civ-spouse dominates at 46%.  Never-married follows at 33%.  The rest of the categories are smaller slices, but potentially behaviorally distinct.
@@ -338,29 +353,47 @@ Collapsing sparse categories may improve model stability and interpretability, e
 Marital status group collapses sparse categories into broader groups for model stability and interpretability.
 
 ```{r define_marital_group}
+# Create marital status group variable
+
 income <- income %>%
   mutate(marital_status_group = case_when(
-    marital_status_cat %in% c("Married-civ-spouse", "Married-AF-spouse") ~ "Married",
-    marital_status_cat %in% c("Divorced", "Separated", "Widowed") ~ "Previously-married",
-    marital_status_cat == "Never-married" ~ "Never-married",
-    TRUE ~ "Other"))
+    marital_status %in% c("Married-civ-spouse", 
+                          "Married-AF-spouse") ~ "Married",
+    marital_status %in% c("Divorced", 
+                          "Separated", 
+                          "Married-spouse-absent", 
+                          "Widowed") ~ "Previously-married",
+    marital_status == "Never-married" ~ "Never-married"))
 
+# Make variable a factor.
+
+income <- income %>%
+  mutate(marital_status_group = factor(marital_status_group, 
+                                       ordered = FALSE,
+                                       levels = c("Married", 
+                                                  "Previously-married", 
+                                                  "Never-married")))
+```
+
+Show distribution of income by marital status group.
+
+```{r}
 # Group by marital group.
 
-income_by_marital_status_group <- income %>%
-  group_by(marital_status_group, income_cat) %>%
+marital_status_group_prop <- income %>%
+  group_by(marital_status_group, income) %>%
   summarise(count = n(), .groups = "drop") %>%
   group_by(marital_status_group) %>%
   mutate(prop = count / sum(count))
 
 # Generate plot.
 
-ggplot(income_by_marital_status_group, aes(x = marital_status_group, y = prop, fill = income_cat)) +
+ggplot(marital_status_group_prop, aes(x = marital_status_group, y = prop, fill = income)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
   labs(title = "Proportion of Income Classes by Marital Status Group",
-       x = "Marital Group",
+       x = "Marital Status Group",
        y = "Proportion",
        fill = "Income Class") +
   theme_minimal() +
@@ -370,21 +403,19 @@ ggplot(income_by_marital_status_group, aes(x = marital_status_group, y = prop, f
 
 Married individuals show the highest proportion of income earners in the `>50K` category. This suggests that marriage may correlate with financial stability, dual-income households, or career maturity.
 
-Never-married, Previously-married, and Other groups (e.g., separated, widowed) all lean heavily toward the `<=50K` category, indicating lower income prevalence.
-
-The "Other" group likely includes individuals facing economic disruption — such as separation or widowhood — which may explain the lower income proportions.
+Previously-married and Never-married groups lean heavily toward the `<=50K` category, indicating lower income prevalence.
 
 ### Hours Per Week
 
 Hours per week represents the number of hours an individual reports working per week in their primary job.
 
 ```{r}
-hours_per_week <- income %>%
-  group_by(hours_per_week_num) %>%
+hours_per_week_summary <- income %>%
+  group_by(hours_per_week) %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
 
-ggplot(hours_per_week, aes(x = hours_per_week_num, y = entries)) +
+ggplot(hours_per_week_summary, aes(x = hours_per_week, y = entries)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Distribution of Hours Per Week",
        x = "Hours Per Week",
@@ -392,10 +423,10 @@ ggplot(hours_per_week, aes(x = hours_per_week_num, y = entries)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(hours_per_week$entries) * 1.2)
+  expand_limits(y = max(hours_per_week_summary$entries) * 1.2)
 ```
 
-There is a prominent spike at 40 hours, which can be considered a classic full-time benchmark in the US.  It dominates the dataset, reflecting standard employment contracts.  There are smaller peaks at 20, 30, 50 and 60 hours, suggesting common part-time and overtime thresholds.  These are potentially tied to specific industries or roles.  The jagged, irregular tail hints at self-reported data or job-specific norms, e.g. self-employment or gig work.
+There is a prominent spike at 40 hours, which can be considered a classic full-time benchmark in the US.  It dominates the dataset, reflecting standard employment contracts.  There are smaller peaks at 20, 30, 50 and 60 hours, suggesting common part-time and overtime thresholds.  These are potentially tied to specific industries or roles.  The jagged, irregular tails hint at self-reported data or job-specific norms, e.g. self-employment or gig work.
 
 ### Hours Group
 
@@ -406,27 +437,34 @@ The hours group variable is a derived categorical feature that segments individu
 * Overtime: Works more than 45 hours per week.
 
 ```{r define_hours_group}
+# Create hours group variable.
+
 income <- income %>%
-  mutate(hours_group_cat = case_when(
-    hours_per_week_num < 30 ~ "Underemployed",
-    hours_per_week_num >= 30 & hours_per_week_num <= 45 ~ "Full-time",
-    hours_per_week_num > 45 ~ "Overtime"),
-    hours_group_num = case_when(
-      hours_group_cat == "Underemployed" ~ 1,
-      hours_group_cat == "Full-time" ~ 2,
-      hours_group_cat == "Overtime" ~ 3))
+  mutate(hours_group = case_when(
+    hours_per_week < 30 ~ "Underemployed",
+    hours_per_week >= 30 & hours_per_week <= 45 ~ "Full-time",
+    hours_per_week > 45 ~ "Overtime"))
+
+# Make variable a factor.
+
+income <- income %>%
+  mutate(hours_group = factor(hours_group,
+                              ordered = TRUE,
+                              levels = c("Underemployed", 
+                                         "Full-time", 
+                                         "Overtime")))
 ```
 
-What is the proportion of high earners by hours group?
+Show proportion of high earners by hours group.
 
 ```{r}
-income_by_hours_group <- income %>%
-  group_by(hours_group_cat, income_cat) %>%
+hours_group_prop <- income %>%
+  group_by(hours_group, income) %>%
   summarise(count = n(), .groups = "drop") %>%
-  group_by(hours_group_cat) %>%
+  group_by(hours_group) %>%
   mutate(prop = count / sum(count))
   
-ggplot(income_by_hours_group, aes(x = hours_group_cat, y = prop, fill = income_cat)) +
+ggplot(hours_group_prop, aes(x = hours_group, y = prop, fill = income)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_y_continuous(labels = scales::percent_format()) +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
@@ -443,27 +481,39 @@ ggplot(income_by_hours_group, aes(x = hours_group_cat, y = prop, fill = income_c
 
 The underemployed group is overwhelmingly low income and likely includes part-time, seasonal or precarious workers.  The full-time group is majority `<=$50k` but has a noticeable uptick in high earners.  This suggests that full-time work alone isn't a guarantee of higher income.  The overtime group has the most balanced distribution; it probably includes a mix of skilled labor, self-employed individuals and salaried workers with performance incentives.
 
-```{r}
-income <- income %>%
-  mutate(hours_group_cat = factor(hours_group_cat, 
-                                  levels = c("Underemployed", "Full-time", "Overtime"),
-                                  ordered = TRUE),
-         hours_group_num = factor(hours_group_num, ordered = TRUE))
-```
-
 ## Education
 
-The education field in the income dataset is a categorical variable with 16 levels, ranging from `Preschool` through advanced degrees like `Doctorate` and `Prof-school`.
+Education is a categorical variable with 16 levels, ranging from Preschool through advanced degrees like Doctorate` and Prof-school.
 
 ```{r}
-education <- income %>%
-  group_by(education_num, education_cat) %>%
-  summarise(entries = n(), .groups = "drop") %>%
-  arrange(education_num) %>%
-  mutate(percent = round(entries / sum(entries), 2),
-         education_cat = factor(education_cat, levels = unique(education_cat)))
+# Make variable a factor.
 
-ggplot(education, aes(x = education_cat, y = entries)) +
+income <- income %>%
+  mutate(education = factor(education, 
+                            levels = c("Preschool", 
+                                       "1st-4th", 
+                                       "5th-6th", 
+                                       "7th-8th", 
+                                       "9th", 
+                                       "10th", 
+                                       "11th", 
+                                       "12th",
+                                       "HS-grad", 
+                                       "Some-college", 
+                                       "Assoc-voc", 
+                                       "Assoc-acdm",
+                                       "Bachelors",
+                                       "Masters",
+                                       "Prof-school", 
+                                       "Doctorate")))
+
+education_summary <- income %>%
+  group_by(education, income) %>%
+  summarise(entries = n(), .groups = "drop") %>%
+  group_by(education) %>%
+  mutate(percent = round(entries / sum(entries), 2))
+
+ggplot(education_summary, aes(x = education, y = entries)) +
   geom_col(fill = "steelblue", color = "white") +
   geom_text(aes(label = paste0(scales::comma(entries), "\n", round(percent * 100, 0), "%")),
             vjust = -0.3, size = 3.0) +
@@ -473,34 +523,34 @@ ggplot(education, aes(x = education_cat, y = entries)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(education$entries) * 1.2)
+  expand_limits(y = max(education_summary$entries) * 1.2)
 ```
 
-High school graduates dominate the sample at 32%; this aligns with national trends.  The some-college a bachelors categories together make up 40% of the sample, indicating strong representation.  Advanced degrees are relatively rare; combined they account for ~7% of the sample, which could limit model ability to generalize to highly educated groups.  Low education levels are sparse; these are likely to be older adults or immigrants with limited formal schooling.
+High school graduates dominate the sample at 32%; this aligns with national trends.  Some-college and Bachelors categories together make up 40% of the sample, indicating strong representation.  Advanced degrees are relatively rare; combined they account for ~7% of the sample, which could limit model ability to generalize to highly educated groups.  Low education levels are sparse; these are likely to be older adults or immigrants with limited formal schooling.
 
 Plot income proportions by education.
 
 ```{r}
 # Group by education.
 
-income_by_education <- income %>%
-  group_by(education_cat, education_num, income_cat) %>%
+income_education_prop <- income %>%
+  group_by(education, income) %>%
   summarise(entries = n(), .groups = "drop") %>%
-  group_by(education_cat) %>%
+  group_by(education) %>%
   mutate(prop = entries / sum(entries))
 
 # Plot summary.
 
-ggplot(income_by_education, 
-       aes(x = forcats::fct_reorder(education_cat, education_num), 
+ggplot(income_education_prop, 
+       aes(x = education, 
            y = prop, 
-           fill = income_cat)) +
+           fill = income)) +
   geom_bar(stat = "identity", position = "stack") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
   labs(title = "Income Proportion by Education Level",
        x = "Education Level",
-       y = "Proportion of Income Category",
+       y = "Proportion",
        fill = "Income") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),
@@ -509,65 +559,73 @@ ggplot(income_by_education,
 
 There's an unmistakable pattern evident in this chart: the gradient from low education levels to advanced degrees is a textbook example of socioeconomic stratification.  Still its surprising to see how nonlinear the education payoff is in income potential.
 
+The proportion of individuals earning `>50K` doesn’t increase at a constant rate across education levels. Instead, it jumps more sharply at certain thresholds, especially from HS-grad to Bachelors, and again from Masters to Doctorate.
+
 High income really starts to dominate at the Bachelor level and is an inflection point for income potential.  Advanced degrees show the highest income potential, but this comes with investment of time and potentially debt as well.
 
 I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_group` variable for this as part of transformations.
 
 ### Education Group
 
-I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_level` variable for this as part of transformations.
+Create a separate `education_group` variable.
 
 ```{r define_education_level_cat}
+# Create education level variable.
 
 income <- income %>%
   mutate(education_group = case_when(
-            education_cat %in% c("Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
+            education %in% c("Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", 
                                  "10th", "11th", "12th") ~ "Non-HS",
-            education_cat %in% c("HS-grad", "Some-college", 
-                                 "Assoc-voc", "Assoc-acdm") ~ "HS/Some College",
-            education_cat %in% c("Bachelors") ~ "Bachelors",
-            education_cat %in% c("Masters") ~ "Masters",
-            education_cat %in% c("Prof-school", "Doctorate") ~ "Prof/Doctorate"),
-         education_group_num = case_when(
-           education_group == "Non-HS" ~ 1,
-           education_group == "HS/Some College" ~ 2,
-           education_group == "Bachelors" ~ 3,
-           education_group == "Masters" ~ 4,
-           education_group == "Prof/Doctorate" ~ 5))
+            education %in% c("HS-grad", "Some-college", 
+                                 "Assoc-voc", "Assoc-acdm") ~ "HS-some-college",
+            education %in% c("Bachelors") ~ "Bachelors",
+            education %in% c("Masters") ~ "Masters",
+            education %in% c("Prof-school", "Doctorate") ~ "Prof-doctorate"))
+
+# Make variable a factor.
 
 income <- income %>%
-  mutate(education_group = factor(education_group, 
-                                  levels = c("Non-HS", "HS/Some College", "Bachelors", 
-                                             "Masters", "Prof/Doctorate"),
-                                  ordered = TRUE),
-         education_group_num = factor(education_group_num, ordered = TRUE))
+  mutate(education_group = factor(education_group,
+                                  ordered = TRUE,
+                                  levels = c("Non-HS", 
+                                             "HS-some-college", 
+                                             "Bachelors",
+                                             "Masters",
+                                             "Prof-doctorate")))
 ```
 
-```{r}
+Plot proportion of income by education group.
 
-income_by_education_group <- income %>%
-  group_by(education_group, education_group_num, income_cat) %>%
+```{r}
+# Group by education group.
+
+education_group_prop <- income %>%
+  group_by(education_group, income) %>%
   summarise(entries = n(), .groups = "drop") %>%
-  group_by(education_group_num) %>%
+  group_by(education_group) %>%
   mutate(prop = entries / sum(entries))
 
 # Plot summary.
 
-ggplot(income_by_education_group, 
+ggplot(education_group_prop, 
        aes(x = education_group, 
            y = prop, 
-           fill = income_cat)) +
+           fill = income)) +
   geom_bar(stat = "identity", position = "stack") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
   labs(title = "Income Proportion by Education Level",
        x = "Education Level",
-       y = "Proportion of Income Category",
+       y = "Proportion",
        fill = "Income") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),
         plot.title = element_text(size = 14, face = "bold"))
 ```
+
+The income jump from Bachelors to Masters to Prof-doctorate is not linear. The gains accelerate, suggesting credential thresholds, e.g., graduate degrees unlocking higher-paying roles, and labor market segmentation, e.g., professional degrees tied to elite occupations.
+
+I will use a natural cubic splines to model this non-linear relationship between your ordinal education variable and the outcome, i.e. `ns(as.numeric(education_group), df = 3)`.
 
 ## Capital Gain/Loss
 
@@ -575,7 +633,7 @@ In the UCI Adult Income dataset, the capital gain and capital loss variables don
 
 Here’s what they represent in practice:
 
-**Capital Gain:** The total taxable profit someone reported in a year from selling assets (stocks, bonds, property, etc.) for more than they paid. A nonzero value suggests the person had some investment activity.
+**Capital Gain:** The total taxable profit someone reported in a year from selling assets (stocks, bonds, property, etc.) for more than they paid.
 
 **Capital Loss:** The total deductible loss someone reported in a year from selling assets for less than they paid. Tax rules allow limited reporting of such losses.
 
@@ -585,44 +643,51 @@ In the dataset, most people have zeros for both variables, meaning they didn’t
 
 While capital gain and capital loss provide useful signals of investment activity, they capture only realized transactions (profits or losses from assets actually sold). They do not account for asset ownership or wealth holdings that have not been sold.  For example, someone may hold significant investments in real estate or retirement accounts but report zero gains or losses if they did not sell anything that year. 
 
-This means the variables reflect investment activity, not necessarily investment capacity or wealth accumulation.
+This means the variables reflect investment activity and non-wage income, not necessarily investment capacity or wealth accumulation.
 
 ### Capital Gain
 
+Generate capital gain summary.
+
 ```{r}
-capital_gain <- income %>%
-  group_by(capital_gain_num) %>%
+# Generate summary.
+
+capital_gain_summary <- income %>%
+  group_by(capital_gain) %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
 
-ggplot(capital_gain, aes(x = capital_gain_num, y = entries)) +
+# Plot summary.
+
+ggplot(capital_gain_summary, aes(x = capital_gain, y = entries)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Distribution of Capital Gain",
-       x = "Capital Gain",
+       x = "Capital Gain (Dollars)",
        y = "Count") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(capital_gain$entries) * 1.2)
+  expand_limits(y = max(capital_gain_summary$entries) * 1.2)
 ```
 
-Both capital gain and loss are heavily zero-inflated, and that skew makes them prime candidates for binary transformation. Here's a breakdown of why and how to do it:
+Capital gains are heavily zero-inflated, and that skew makes it a prime candidate for binary transformation. Most individuals have zero capital gain, so the continuous values only apply to a small subset. Continuous skewed variables can distort coefficients or inflate variance in linear models. A binary flag captures the presence of investment activity, which may correlate with income or occupation.
 
-Sparse signal: Most individuals have zero capital gain/loss, so the continuous values only apply to a small subset.
-
-Model stability: Continuous skewed variables can distort coefficients or inflate variance in linear models.
-
-Behavioral clarity: A binary flag captures the presence of investment activity, which may correlate with income or occupation.
+Plot cumulative distribution of capital gains.
 
 ```{r}
-capital_gain %>%
-  arrange(capital_gain_num) %>%
-  mutate(cumulative = cumsum(entries) / sum(entries)) %>%
-  ggplot(aes(x = capital_gain_num, y = cumulative)) +
+# Group by gain.
+
+capital_gain_prop <- capital_gain_summary %>%
+  arrange(capital_gain) %>%
+  mutate(cumulative = cumsum(entries) / sum(entries))
+
+# Plot proportion.
+
+ggplot(capital_gain_prop, aes(x = capital_gain, y = cumulative)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Cumulative Distribution of Capital Gain",
-       x = "Capital Gain",
-       y = "Cumulative Proportion") +
+       x = "Capital Gain (Dollars)",
+       y = "Proportion") +
     theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold"))
@@ -634,38 +699,50 @@ Capital gain is a strong signal of financial activity and wealth accumulation, b
 
 ### Capital Loss
 
+Generate capital loss summary.
+
 ```{r}
-capital_loss <- income %>%
-  group_by(capital_loss_num) %>%
+# Generate summary.
+
+capital_loss_summary <- income %>%
+  group_by(capital_loss) %>%
   summarise(entries = n(), .groups = "drop") %>%
   mutate(percent = round(entries / sum(entries), 2))
 
-ggplot(capital_loss, aes(x = capital_loss_num, y = entries)) +
+# Plot summary.
+
+ggplot(capital_loss_summary, aes(x = capital_loss, y = entries)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Distribution of Capital Loss",
-       x = "Capital Loss",
+       x = "Capital Loss (Dollars)",
        y = "Count") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold")) +
-  expand_limits(y = max(capital_loss$entries) * 1.2)
+  expand_limits(y = max(capital_loss_summary$entries) * 1.2)
 ```
 
 Capital loss is also heavily zero-inflated.
 
+Plot cumulative distribution of capital losses.
+
 ```{r}
-capital_loss %>%
-  arrange(capital_loss_num) %>%
-  mutate(cumulative = cumsum(entries) / sum(entries)) %>%
-  ggplot(aes(x = capital_loss_num, y = cumulative)) +
+# Group by loss.
+
+capital_loss_prop <- capital_loss_summary %>%
+  arrange(capital_loss_summary) %>%
+  mutate(cumulative = cumsum(entries) / sum(entries))
+
+# Plot proportion.
+
+  ggplot(capital_loss_prop, aes(x = capital_loss, y = cumulative)) +
   geom_line(size = 1, color = "steelblue") +
   labs(title = "Cumulative Distribution of Capital Loss",
-       x = "Capital Loss",
-       y = "Cumulative Proportion") +
+       x = "Capital Loss (Dollars)",
+       y = "Proportion") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 1),
         plot.title = element_text(size = 14, face = "bold"))
-
 ```
 
 Over 96% of individuals report zero or minimal capital loss. A steep rise in the cumulative distribution between 1,000 and 2,000 suggests that most reported losses fall within this range. Very few individuals report losses above 2,000.
@@ -677,38 +754,50 @@ Combining capital gain and capital loss into a single binary variable reduces tw
 Create a single investment activity flag using capital gain and capital loss.
 
 ```{r define_has_investment_activity}
+# Create investment activity variable.
+
 income <- income %>%
-  mutate(has_investment_activity = if_else(capital_gain_num > 0 | capital_loss_num > 0, 1, 0),
-         has_investment_activity_cat = if_else(has_investment_activity == 0, "No", "Yes"))
+  mutate(has_investment_activity = if_else(capital_gain > 0 | capital_loss > 0, "Yes", "No"))
+
+# Make variable a factor.
+
+income <- income %>%
+  mutate(has_investment_activity = factor(has_investment_activity,
+                                          ordered = FALSE,
+                                          levels = c("Yes", "No")))
 ```
 
 Check distribution of the variable.
 
 ```{r}
+# Group by activity.
+
 investment_by_income <- income %>%
-  group_by(has_investment_activity_cat, income_cat) %>%
+  group_by(has_investment_activity, income) %>%
   summarise(entries = n()) %>%
   mutate(percent = round(entries / sum(entries), 2))
 
+# Plot distribution.
+
 ggplot(investment_by_income, 
-       aes(x = has_investment_activity_cat, 
+       aes(x = has_investment_activity, 
            y = percent, 
-           fill = income_cat)) +
+           fill = income)) +
   geom_bar(stat = "identity", position = "stack") +
   scale_fill_manual(values = c("<=50K" = "lightsteelblue", ">50K" = "steelblue")) +
   scale_y_continuous(labels = scales::percent_format()) +
   labs(title = "Income Proportion by Investment Activity",
        x = "Investment  Activity",
-       y = "Proportion of Income Category",
+       y = "Proportion",
        fill = "Income") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
         plot.title = element_text(size = 14, face = "bold"))
 ```
 
-Individuals who do not engage in investment activity are predominantly in the `<=50K` income category.
+Individuals who have not had capital gains or losses are predominantly in the `<=50K` income category.
 
-Those who do invest show a much higher proportion in the `>50K` category, suggesting that investment behavior correlates with higher earnings.
+Those who have reported capital gains or losses show a much higher proportion in the `>50K` category, suggesting that investment behavior correlates with higher earnings.
 
 Investment activity may reflect financial literacy, risk tolerance, or access to disposable income.
 
@@ -722,55 +811,117 @@ Save data with features.
 saveRDS(income, "../data/income_final.rds")
 ```
 
+# Correlations
+
+Load transformed income data.
+
+```{r}
+income <- readRDS("../data/income_final.rds")
+```
+
+Check for correlations among predictors.
+
+```{r}
+# Set vectors.
+
+predictors <- c("career_stage", "marital_status_group", "hours_group",
+                "education_group", "has_investment_activity")
+
+ordinal_vars <- c("career_stage", "hours_group", "education_group")
+
+# Run the function to generate correlations summary.
+
+assoc_summary <- test_predictor_associations(income, predictors, ordinal_vars)
+```
+
+This correlation matrix confirms that your predictors are behaviorally distinct but lightly interrelated, which is ideal for modeling.
+
+Print correlations in table form.
+
+```{r}
+# Print numeric values.
+
+kable(assoc_summary, 
+      col.names = c("Pair", "Type", "Value"),
+      format.args = list(big.mark = ","),
+      align = c("l", "l", "r"))
+```
+
+`career_stage ~ marital_status_group`, with a Cramér’s V = 0.406, is the strongest association. This suggests that career progression is meaningfully related to marital status, possibly due to age, stability, or life stage effects. This could also reflect behavioral segmentation: married individuals may cluster in mid-career or peak-earning stages.
+
+Cramér’s V values above 0.3 suggest moderate association between categorical variables. Spearman correlations are also low, indicating weak monotonic relationships between ordinal variables.
+
+# Multicollinearity
+
+```{r}
+predictors <- c("career_stage", "marital_status_group", "hours_group",
+                "education_group", "has_investment_activity")
+
+vif_summary <- check_multicollinearity_factors(income, predictors)
+
+kable(vif_summary, 
+      col.names = c("Variable", "VIF"),
+      format.args = list(big.mark = ","),
+      align = c("l", "r"))
+```
+
+All VIFs are below 2.2, which is comfortably within the safe zone (common thresholds are 5 or 10). This means no predictor is linearly dependent on the others, and coefficient estimates should be stable.
+
+This VIF profile confirms that the model should be statistically sound and behaviorally distinct.
+
 ## Class Balance
 
-I will use class weighting in the training set to counteract the imbalance in the outcome classes (after splitting the income data). 
+Class weighting in the training set will counteract the imbalance in the outcome classes (after splitting the income data). 
 
 This ensures performance metrics are meaningful for decision-making, while still allowing models to be tuned for sensitivity and accuracy where it matters most.
 
 # Split Data
 
-The dataset will be split into 60% training, 20% validation, and 20% test. This allocation provides enough data to train stable models while dedicating a higher-than-usual share to validation and testing. With a large dataset, this approach strengthens model comparison, improves tuning, and ensures that final performance metrics are based on a robust and representative holdout set.
+Split the dataset into 60% training, 20% validation, and 20% test. This allocation provides enough data to train stable models while dedicating a higher-than-usual share to validation and testing. With a large dataset, this approach strengthens model comparison, improves tuning, and ensures that final performance metrics are based on a robust and representative holdout set.
 
 ```{r split_data}
-income <- readRDS("../data/income_final.rds")
-
 set.seed(123)
 
 # Initial train/test split.
 
-train_idx <- createDataPartition(income$income_cat, p = 0.6, list = FALSE)
+train_idx <- createDataPartition(income$income, p = 0.6, list = FALSE)
 
-train <- income[train_idx, ]
+income_train <- income[train_idx, ]
 
 temp  <- income[-train_idx, ]
 
 # Split remaining into validation/test.
 
-valid_idx <- createDataPartition(temp$income_cat, p = 0.5, list = FALSE)
+valid_idx <- createDataPartition(temp$income, p = 0.5, list = FALSE)
 
-validation <- temp[valid_idx, ]
+income_validate <- temp[valid_idx, ]
 
-test <- temp[-valid_idx, ]
+income_test <- temp[-valid_idx, ]
 ```
 
 Check class balance in the train, validation and test sets.
 
 ```{r check_splits}
+# Check balance function.
+
 check_balance <- function(df, name) {
   df %>%
-    count(income_cat) %>%
+    count(income) %>%
     mutate(prop = round(n / sum(n), 2),
            dataset = name) %>%
     select(dataset,
-           income_cat, 
+           income, 
            n,
            prop)
 }
 
-check <- bind_rows(check_balance(train, "Train"),
-                   check_balance(validation, "Validation"),
-                   check_balance(test, "Test"))
+#Generate data frame.
+
+check <- bind_rows(check_balance(income_train, "Train"),
+                   check_balance(income_validate, "Validation"),
+                   check_balance(income_test, "Test"))
+
+# Produce table summary.
 
 kable(check,
       col.names = c("Dataset", "Income Level", "Count", "Percent"),
@@ -779,22 +930,24 @@ kable(check,
       align = c("l", "r", "r", "r"))
 ```
 
+The table confirms the income class split across train, validation, and test sets.
+
 Use class weighting in the training set to counteract the imbalance in the outcome classes.
 
 ```{r}
 # Calculate the proportion of each class in the training set.
 
-train_props <- prop.table(table(train$income_num))
+train_props <- prop.table(table(income_train$income_num))
 
 # Assign invserse frequency weights.
 
-train$weight <- ifelse(train$income_num == 1,
+income_train$weight <- ifelse(income_train$income_num == 1,
                             1 / train_props["1"],
                             1 / train_props["0"])
 
 # Normalize weights.
 
-train$weight <- train$weight / mean(train$weight)
+income_train$weight <- income_train$weight / mean(income_train$weight)
 ```
 
 Each row in train gets a numeric value in the weight variable such that:
@@ -813,21 +966,19 @@ We begin by preparing the predictor matrix X, containing numeric representations
 A weight vector establishes class weights.
 
 ```{r}
-train$marital_status_group <- factor(train$marital_status_group)
-
 # Prepare the predictor matrix.
 
-X <- model.matrix(~ poly(career_stage_num, 2) +
+X <- model.matrix(~ poly(career_stage, 2) +
                         marital_status_group +
-                        hours_group_num +
-                        education_group_num +
-                        has_investment_activity - 1, data = train)
+                        hours_group +
+                        splines::ns(as.numeric(education_group), df = 3) +
+                        has_investment_activity - 1, data = income_train)
 
-X <- X[, -which(colnames(X) == "marital_status_groupPreviously-married")]
+#X <- X[, -which(colnames(X) == "marital_status_groupPreviously-married")]
 
 # Create indicator matrix for binary response
 
-G <- train$income_num  # Assumed to be 0/1
+G <- income_train$income_num  # Assumed to be 0/1
 
 Y <- model.matrix(~ factor(G) - 1)  # One-hot encoding
 
@@ -897,7 +1048,7 @@ Evaluate the predicted classes against the true labels using a confusion matrix.
 ```{r}
 # Evaluate classification performance.
 
-cm_linear_matrix <- caret::confusionMatrix(factor(class_pred_binary), factor(train$income_num))
+cm_linear_matrix <- caret::confusionMatrix(factor(class_pred_binary), factor(income_train$income_num))
 
 cm_linear_matrix
 ```
@@ -972,7 +1123,7 @@ Together, these outputs provide a numeric indication and clear visual of the con
 
 score_class1 <- pred[, 2]
 
-roc_obj_lm <- pROC::roc(response = train$income_num, predictor = score_class1)
+roc_obj_lm <- pROC::roc(response = income_train$income_num, predictor = score_class1)
 
 # Plot ROC curve.
 
@@ -996,12 +1147,12 @@ This AUC score indicates that the model can distinguish between `>50K` and `<=50
 ```{r}
 
 model_logistic <- glm(income_num ~ 
-                        poly(career_stage_num, 2) +
+                        poly(career_stage, 2) +
                         marital_status_group +
-                        hours_group_num +
-                        education_group_num +
+                        hours_group +
+                        splines::ns(as.numeric(education_group), df = 3) +
                         has_investment_activity,
-                    data = train, weights = weight, family = "binomial")
+                    data = income_train, weights = weight, family = "binomial")
 ```
 
 Note on the non-integer warning message.  This message is triggered when using non-integer weights in a binomial glm(). The binomial family expects counts of successes and failures, and when weights are fractional, it assumes we are modeling aggregated binomial outcomes, which is not the case for this model.
@@ -1019,9 +1170,9 @@ summary(model_logistic)
 ### Generate ROC Curve and AUC Metric
 
 ```{r}
-train$predicted_prob <- predict(model_logistic, type = "response")
+income_train$predicted_prob <- predict(model_logistic, type = "response")
 
-roc_obj_log <- pROC::roc(train$income_num, train$predicted_prob)
+roc_obj_log <- pROC::roc(income_train$income_num, income_train$predicted_prob)
 
 plot(roc_obj_log, col = "blue", main = "ROC Curve for Logistic Regression")
 ```
@@ -1037,9 +1188,9 @@ pROC::auc(roc_obj_log)
 ```{r}
 threshold <- 0.5
 
-train$predicted_class <- ifelse(train$predicted_prob > 0.5, 1, 0)
+income_train$predicted_class <- ifelse(income_train$predicted_prob > 0.5, 1, 0)
 
-cm_logistic <- caret::confusionMatrix(factor(train$predicted_class), factor(train$income_num))
+cm_logistic <- caret::confusionMatrix(factor(income_train$predicted_class), factor(income_train$income_num))
 
 cm_logistic
 ```
@@ -1254,22 +1405,22 @@ Faceted coefficient plot by model...
 Where do the linear predictions overshoot? Are they concentrated in certain subgroups?
 
 ```{r}
-resid_df <- compare_model_residuals(
-  #linear = lin_mod,
-  logistic = model_logistic
-)
-
-head(resid_df)
+# resid_df <- compare_model_residuals(
+#   #linear = lin_mod,
+#   logistic = model_logistic
+# )
+# 
+# head(resid_df)
 
 ```
 
 Visualize residuals...
 
 ```{r}
-ggplot(resid_df, aes(x = fitted, y = residual, color = model)) +
-  geom_point(alpha = 0.5) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  labs(title = "Residuals vs Fitted Values", x = "Fitted", y = "Residual")
+# ggplot(resid_df, aes(x = fitted, y = residual, color = model)) +
+#   geom_point(alpha = 0.5) +
+#   geom_hline(yintercept = 0, linetype = "dashed") +
+#   labs(title = "Residuals vs Fitted Values", x = "Fitted", y = "Residual")
 ```
 
 ### Fairness stratification
@@ -1285,27 +1436,27 @@ Prepare the validation predictor matrix.
 ```{r}
 # Ensure factor levels match training.
 
-validation$marital_status_group <- factor(validation$marital_status_group,
-                                     levels = levels(train$marital_status_group))
+# validation$marital_status_group <- factor(validation$marital_status_group,
+#                                      levels = levels(train$marital_status_group))
 
 # Build validation design matrix.
 
-X_valid <- model.matrix(~ poly(career_stage_num, 2) +
+X_valid <- model.matrix(~ poly(career_stage, 2) +
                           marital_status_group +
-                          hours_group_num +
-                          education_group_num +
+                          hours_group +
+                          splines::ns(as.numeric(education_group), df = 3) +
                           has_investment_activity - 1,
-                        data = validation)
+                        data = income_validate)
 
 # Drop the same column as in training.
 
-drop_col <- "marital_status_groupPreviously-married"
+# drop_col <- "marital_status_groupPreviously-married"
 
-if (drop_col %in% colnames(X_valid)) {
-  X_valid <- X_valid[, colnames(X_valid) != drop_col, drop = FALSE]
-}
+# if (drop_col %in% colnames(X_valid)) {
+#   X_valid <- X_valid[, colnames(X_valid) != drop_col, drop = FALSE]
+# }
 
-G_valid <- validation$income_num  # Binary outcome: 0 or 1
+G_valid <- income_validate$income_num  # Binary outcome: 0 or 1
 
 Y_valid <- model.matrix(~ factor(G_valid) - 1)  # One-hot encoding
 ```
@@ -1356,10 +1507,10 @@ Evaluate the predicted classes against the true labels using a confusion matrix.
 class_pred_binary <- pred_class  # from apply(... which.max(row) - 1)
 
 # Compute confusion matrix
-library(caret)
+
 cm_linear_matrix <- caret::confusionMatrix(
   factor(class_pred_binary),
-  factor(validation$income_num),
+  factor(income_validate$income_num),
   positive = "1"  # or "0", depending on which class you want as positive
 )
 

@@ -2,23 +2,28 @@
 library("dplyr")
 library("forcats")
 
-col_names <- c("age_num", 
-               "workclass_cat", 
+col_names <- c("age", 
+               "workclass", 
                "fnlwgt", 
-               "education_cat", 
-               "years_of_education_num",
-               "marital_status_cat", 
-               "occupation_cat", 
-               "relationship_cat", 
-               "race_cat", 
-               "gender_cat",
-               "capital_gain_num", 
-               "capital_loss_num", 
-               "hours_per_week_num", 
-               "native_country_cat", 
-               "income_cat")
+               "education", 
+               "years_of_education",
+               "marital_status", 
+               "occupation", 
+               "relationship", 
+               "race", 
+               "gender",
+               "capital_gain", 
+               "capital_loss", 
+               "hours_per_week", 
+               "native_country", 
+               "income")
 
-income <- read.csv("./inst/extdata/adult.data", 
+income <- read.csv("./inst/extdata/adult.data",
+                   col.names = col_names,
+                   na.strings = c("", " ?")) %>%
+  mutate(across(where(is.character), stringr::str_squish))
+
+income2 <- read.csv("./inst/extdata/adult.data", 
                    col.names = col_names,
                    na.strings = c("", " ?")) %>%
   mutate(across(where(is.character), stringr::str_squish),
@@ -164,3 +169,5 @@ income <- read.csv("./inst/extdata/adult.data",
          native_country_num)
          
 saveRDS(income, file = "./data/income.rds")
+
+saveRDS(income2, file = "./data/income2.rds")
