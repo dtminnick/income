@@ -838,7 +838,7 @@ assoc_summary <- test_predictor_associations(income, predictors, ordinal_vars)
 rownames(assoc_summary) <- NULL
 ```
 
-This correlation matrix confirms that your predictors are behaviorally distinct but lightly interrelated, which is ideal for modeling.
+This correlation matrix confirms that the predictors are behaviorally distinct but lightly interrelated, which is ideal for modeling.
 
 Print correlations in table form.
 
@@ -856,6 +856,8 @@ kable(assoc_summary,
 Cramér’s V values above 0.3 suggest moderate association between categorical variables. Spearman correlations are also low, indicating weak monotonic relationships between ordinal variables.
 
 # Multicollinearity
+
+Use the custom function `check_multicollinearity_factors` on the income dataset, using the specified predictors. Calculate Variance Inflation Factors (VIFs) to see how much each predictor is correlated with the others.
 
 ```{r}
 predictors <- c("career_stage", "marital_status_group", "hours_group",
@@ -958,10 +960,7 @@ income_train$weight <- ifelse(income_train$income_num == 1,
 income_train$weight <- income_train$weight / mean(income_train$weight)
 ```
 
-Each row in train gets a numeric value in the weight variable such that:
-
-* Observations in the minority class (income_num == 1, typically >50K) receive higher weights, and
-* Observations in the majority class (income_num == 0, typically ≤50K) receive lower weights.
+Each row in the training set gets a numeric value in the weight variable such that observations in the minority class `(income_num == 1, typically >50K)`>50K` receive higher weights, and  observations in the majority class `<=50K` receive lower weights.
 
 The weights are normalized to have a mean of 1, so they don’t distort the overall scale of the model’s loss function.
 
@@ -969,7 +968,7 @@ The weights are normalized to have a mean of 1, so they don’t distort the over
 
 ## Linear Regression Indicator Matrix Model
 
-We begin by preparing the predictor matrix X, containing numeric representations of age, education, and marital status. The response variable, income, is coded as 0 (≤$50K) or 1 (>$50K). We convert it to a one-hot (indicator) matrix Y for the multivariate linear regression.
+Prepare the predictor matrix X, containing numeric representations of age, education, and marital status. The response variable, income, is coded as 0 `<=$50K` or 1 `>$50K`. It is converted to a one-hot (indicator) matrix Y for the multivariate linear regression.
 
 A weight vector establishes class weights.
 
@@ -984,9 +983,13 @@ X <- model.matrix(~ poly(career_stage, 2) +
 
 # Create indicator matrix for binary response
 
-G <- income_train$income_num  # Assumed to be 0/1
+# Assumed to be 0/1
 
-Y <- model.matrix(~ factor(G) - 1)  # One-hot encoding
+G <- income_train$income_num  
+
+# One-hot encoding
+
+Y <- model.matrix(~ factor(G) - 1)
 
 # Class proportions.
 
@@ -1008,8 +1011,6 @@ A multivariate linear regression is fit with the one-hot encoded response matrix
 ```{r}
 # fit the linear regression model and produce summary.
 
-# model_linear_matrix <- lm(Y ~ X, weights = weights_vec)
-
 model_linear_matrix <- lm(Y ~ poly(career_stage, 2) +
                               marital_status_group +
                               hours_group +
@@ -1025,17 +1026,11 @@ We then produce model summaries.
 summary(model_linear_matrix)
 ```
 
-The coefficients in factor(G)1 are exact negatives of those in factor(G)0.
+The model estimates income classification separately for those below and above $50K, which results in coefficients that are equal in magnitude but opposite in sign. 
 
-This makes sense because we are modeling the same binary outcome from opposite perspectives (0 vs. 1), and the linear predictions must sum to 1.
+Interpreting the effects shows that being married, working more hours, having higher levels of education, and engaging in investment activity all decrease the likelihood of being in the lower-income group and increase the likelihood of being in the higher-income group. 
 
-Many predictors are highly significant (p < 2e-16), with large t-values.
-
-The marital status effect is striking: being married is associated with lower probability of factor(G)0 (likely low income), and higher probability of factor(G)1 (high income).
-
-Underemployment and overtime have opposite signs.
-
-Investment activity is a strong positive predictor of higher income classification, but could also reflect access or privilege.
+Nonlinear career stage terms further indicate that the relationship between career progression and income is curved rather than strictly linear.
 
 Using the fitted model, predict scores for each class. These predicted scores may fall outside the 0–1 range, which highlights the limitation of using linear regression for classification.
 
@@ -1067,9 +1062,13 @@ cm_linear_matrix_train <- caret::confusionMatrix(factor(train_class_pred_binary)
 cm_linear_matrix_train
 ```
 
-Although we can produce predicted classes and metrics, the predicted probabilities from a linear model are not constrained to [0,1]. This can result in nonsensical probabilities, motivating the use of logistic regression for binary outcomes.
+The model achieves an overall accuracy of 77.5% (95% CI: 76.9–78.1%), which is statistically higher than the no-information baseline of 75.9% (p < 0.001). While this improvement is significant given the large sample size, the absolute gain in accuracy is modest.
+
+Performance is stronger at identifying the majority group (class 0, < $50K), with sensitivity of 74.8% and a very high positive predictive value of 94.3%. Specificity is also strong at 85.8%, but the negative predictive value is lower (52.0%), meaning the model struggles more with correctly identifying higher-income cases. The balanced accuracy is 80.3%, and Cohen’s Kappa of 0.50 indicates moderate agreement beyond chance.
 
 ### Extreme Probabilities
+
+Although we can produce predicted classes and metrics, the predicted probabilities from a linear model are not constrained to 0-1. This can result in nonsensical probabilities, motivating the use of logistic regression for binary outcomes.
 
 The table below summarizes the number and percentage of predicted probabilities from the linear regression model that fall outside the valid 0–1 range for each class. As expected, linear regression applied to a binary outcome can produce estimates below 0 or above 1, highlighting a limitation of this approach for classification tasks.
 
@@ -1136,7 +1135,11 @@ ggplot(df_long, aes(x = Probability, fill = Class)) +
 
 Together, these outputs provide a numeric indication and clear visual of the constraints of using linear regression for a categorical outcome, setting the stage for comparison with the logistic regression model.
 
+Because linear regression is not bounded, the model produces predicted values below 0 and above 1, which are not valid probabilities. This creates problems for interpretation, since values like –0.2 or 1.3 cannot be meaningfully explained as likelihoods. It also complicates classification, as thresholding these outputs can distort decision rules, and the predictions themselves are not well calibrated to reflect true probabilities.
+
 ### Generate ROC Curve and AUC Metric
+
+To evaluate the discriminatory power of the indicator regression model, extract the predicted probabilities for the positive class and used them as inputs to generate a Receiver Operating Characteristic (ROC) curve.
 
 ```{r}
 # Column 2 corresponds to class 1 (income_num == 1).
@@ -1160,9 +1163,11 @@ The gray line represents random guessing. The model clearly outperforms this bas
 pROC::auc(roc_obj_lm)
 ```
 
-This AUC score indicates that the model can distinguish between `>50K` and `<=50K` earners with nearly 89% accuracy across all thresholds.
+This AUC score indicates that the model can distinguish between `>50K` and `<=50K` earners with 88.4% accuracy across all thresholds.
 
 ## Logistic Regression
+
+Build a logistic regression model to estimate income likelihood, using career stage, marital status, hours worked, education, and investment activity as predictors, with adjustments for weighting.
 
 ```{r}
 # Produce logistic model.
@@ -1178,17 +1183,25 @@ model_logistic <- glm(income_num ~
 
 Note on the non-integer warning message.  This message is triggered when using non-integer weights in a binomial glm(). The binomial family expects counts of successes and failures, and when weights are fractional, it assumes we are modeling aggregated binomial outcomes, which is not the case for this model.
 
-The warning is safe to ignore because I am using weights to adjust for class imbalance, not to model grouped binomial trials.  The response variable is binary and the weights are just importance weights, not trial counts.
+Based on my research, the warning is safe to ignore because I am using weights to adjust for class imbalance, not to model grouped binomial trials.  The response variable is binary and the weights are just importance weights, not trial counts.
 
 The model still fits correctly and returns valid coefficients, standard errors, and predictions.
 
 ### Generate Model Summary
 
+Produce model summary.
+
 ```{r}
 summary(model_logistic)
 ```
 
+The logistic regression model estimates the probability of higher income using the same predictors as the prior linear models: career stage, marital status, hours worked, education, and investment activity. Unlike the linear approach, which produced unbounded predictions outside the 0–1 range, the logistic specification constrains all fitted values between 0 and 1, allowing direct probability interpretation. 
+
+The coefficients here represent log-odds, showing strong positive associations between higher income and being married, working more hours, higher education, and investment activity, along with nonlinear effects for career stage and hours worked. This formulation provides a better-calibrated and more interpretable model for classification compared with the earlier linear regressions.
+
 ### Generate ROC Curve and AUC Metric
+
+Extract the predicted probabilities for the positive class and used them as inputs to generate a Receiver Operating Characteristic (ROC) curve.
 
 ```{r}
 income_train$predicted_prob <- predict(model_logistic, type = "response")
@@ -1198,13 +1211,19 @@ roc_obj_log <- pROC::roc(income_train$income_num, income_train$predicted_prob)
 plot(roc_obj_log, col = "steelblue", main = "ROC Curve for Logistic Regression")
 ```
 
+This blue line bows toward the top-left corner, which indicates high sensitivity and specificity across thresholds. The shape suggests an AUC in the high 0.7s to low 0.8s, which is similar to the linear indicator model.
+
+The model clearly outperforms this baseline, which confirms meaningful signal in the predictors.
+
 ```{r}
 pROC::auc(roc_obj_log)
 ```
 
+This AUC score indicates that the model can distinguish between `>50K` and `<=50K` earners with 88.6% accuracy across all thresholds, which is slightly better than the lineear indicator model.
+
 ### Generate Confusion Matrix
 
-
+Evaluate the predicted classes against the true labels using a confusion matrix.
 
 ```{r}
 threshold <- 0.5
@@ -1215,6 +1234,8 @@ cm_logistic_train <- caret::confusionMatrix(factor(income_train$predicted_class)
 
 cm_logistic_train
 ```
+
+
 
 # Compare Models
 
