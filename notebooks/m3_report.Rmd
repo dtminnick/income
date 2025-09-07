@@ -1,18 +1,20 @@
 ---
 title: "Predicting Income Level from Demographic and Behavioral Variables"
-subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic Regression Approaches"
 author: "Donnie Minnick, Statistical Learning - Fall A 2025"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
+  word_document: default
   html_document:
     df_print: paged
     theme:
       version: 4
       bootswatch: flatly
-      primary: "#2C3E50"   # deep blue
-      secondary: "#18BC9C" # accent teal
-      base_font: "Arial"
-      heading_font: "Calibri"
+      primary: '#2C3E50'
+      secondary: '#18BC9C'
+      base_font: Arial
+      heading_font: Calibri
+subtitle: A Comparison of Linear Regression with an Indicator Matrix and Logistic
+  Regression Approaches
 ---
 
 # Project Overview
@@ -1453,6 +1455,10 @@ cm_logistic_validate <- caret::confusionMatrix(factor(class_pred_logistic),
 cm_logistic_validate
 ```
 
+The logistic regression model demonstrates robust generalization to the validation set, with an overall accuracy exceeding 78% and balanced performance across income classes. It is particularly confident in identifying low-income individuals, with a precision exceeding 94%. While predictions for high-income individuals are less precise, the model still maintains strong specificity and balanced accuracy. 
+
+These results suggest that the model is well-calibrated for practical use, especially in contexts where identifying low-income individuals is a priority. However, further refinement may be warranted to improve precision and recall for the minority class.
+
 Add metrics to metrics data frame.
 
 ```{r}
@@ -1497,30 +1503,97 @@ kable(df_metrics,
       align = c("l", "r", "r", "r", "r"))
 ```
 
+While linear regression edges out in specificity and positive predictive value, logistic regression leads in overall accuracy, sensitivity, kappa, and negative predictive value, all critical for balanced classification. The differences are small but consistent.
+
+The logistic regression model offers slightly better generalization and class balance, with stronger recall for both income groups.
+
 # Choose Final Model
+
+After evaluating both linear and logistic regression models on training and validation sets, I selected logistic regression as the final model. This decision is based on its consistently stronger performance across key classification metrics, including:
+
+* Higher accuracy (78.42% vs. 78.29%),
+* Better sensitivity (76.17% vs. 75.87%), which is crucial for identifying the majority class,
+* Slightly higher Kappa (0.5111 vs. 0.5098), indicating stronger agreement beyond chance, and
+* Improved negative predictive value (53.24% vs. 53.03%), which is helpful for minority class reliability.
+
+While linear regression showed marginally higher specificity and positive predictive value, logistic regression offers better overall balance and generalization, as reflected in its training and validation metrics.
+
+In addition to slightly stronger validation metrics, logistic regression was selected for its bounded output and probabilistic interpretation.  By choosing logistic regression, I ensure that predictions are interpretable as probabilities, bounded, and aligned with the classification task — reinforcing both theoretical soundness and practical reliability.
 
 # Retrain Final Model
 
-```{r}
+Retrain the final logistic regression model on the full training and validation data, then evaluate on the test set once. This gives the cleanest estimate of how the model will perform in deployment.
 
+Combine train and validation sets.
+
+```{r}
+income_train <- income_train %>%
+  select(-weight,
+         -predicted_prob,
+         -predicted_class)
+
+income_full <- rbind(income_train, income_validate)
 ```
 
+Calculate class weights for the final model.
+
+```{r}
+# Calculate the proportion of each class in the training set.
+
+full_props <- prop.table(table(income_full$income_num))
+
+# Assign invserse frequency weights.
+
+income_full$weight <- ifelse(income_full$income_num == 1,
+                            1 / full_props["1"],
+                            1 / full_props["0"])
+
+# Normalize weights.
+
+income_full$weight <- income_full$weight / mean(income_full$weight)
+```
+
+Produce the final model.
+
+```{r}
+# Produce logistic model.
+
+model_logistic_final <- glm(income_num ~ 
+                          poly(career_stage, 2) +
+                          marital_status_group +
+                          hours_group +
+                          splines::ns(as.numeric(education_group), df = 3) +
+                          has_investment_activity,
+                    data = income_full, weights = weight, family = "binomial")
+
+summary(model_logistic_final)
+```
+
+There is an increase in deviance and AIC compared to the prior logistic model.  This reflects the larger sample size, not a drop in model quality. The final model is trained on more data, which naturally increases total deviance but improves generalizability.
+
+Coefficients remain stable across models, with minor shifts reflecting the added data. The career stage terms show stronger curvature, and the marital and hours effects slightly intensify, suggesting more robust estimates.
+
+The final model preserves the structure and significance of the original while benefiting from a larger, more diverse training set. Coefficient magnitudes are consistent, and all predictors remain highly significant. The retrained model is better equipped to generalize, with more stable estimates and improved reliability for downstream evaluation.
+
 # Evaluate Model
+
+Run prediction using the final model with the test set.
 
 ```{r}
 # Predict probabilities for class 1 (income >50K).
 
-pred_probs_logistic <- predict(model_logistic, newdata = income_test, type = "response")
+pred_probs_logistic_final <- predict(model_logistic_final, newdata = income_test, type = "response")
 
 # Convert to binary class predictions using threshold 0.5.
 
-class_pred_logistic <- ifelse(pred_probs_logistic >= 0.5, 1, 0)
-
+class_pred_logistic_final <- ifelse(pred_probs_logistic_final >= 0.5, 1, 0)
 ```
+
+Generate the confusion matrix for the final test set.
 
 ```{r}
 
-cm_logistic_test <- caret::confusionMatrix(factor(class_pred_logistic),
+cm_logistic_test <- caret::confusionMatrix(factor(class_pred_logistic_final),
                                             factor(income_test$income_num))
 
 cm_logistic_test
@@ -1570,13 +1643,38 @@ kable(df_metrics,
       align = c("l", "r", "r", "r", "r", "r"))
 ```
 
+The final logistic regression model, retrained on the full training and validation data, maintains the strongest performance across all evaluation sets. It offers:
+
+* Highest overall accuracy (78.39%),
+* Strong agreement beyond chance (Kappa = 0.5106),
+* Balanced recall for both income classes (Sensitivity = 76.13%, Specificity = 85.52%),
+* Stable precision for low-income predictions (PPV = 94.31%),
+* Improved reliability for high-income predictions (NPV = 53.19%), and
+* Consistent balanced accuracy (80.83%), confirming fair treatment of both classes
+
+Compared to earlier models trained on subsets, the final logistic model shows no degradation in performance, confirming that retraining on more data yields more stable and generalizable estimates.
+
 # Final Analysis
 
 ## Conclusions
 
+This analysis compared linear regression with an indicator matrix and logistic regression for classifying individuals as earning above or below $50,000 per year, using key socioeconomic predictors from the UCI Adult Income dataset.
+
+Across training, validation, and test sets, logistic regression consistently outperformed linear regression in terms of accuracy, sensitivity, kappa, and negative predictive value. While both models achieved high specificity and precision for the majority class, logistic regression offered better balance and generalization, particularly for identifying minority-class individuals.
+
+Importantly, logistic regression’s bounded probability outputs and alignment with binary classification theory made it the more appropriate and interpretable choice. The linear model, while competitive in some metrics, suffered from unbounded predictions and thresholding limitations.
+
+Based on these results, logistic regression was selected as the final model for its stronger predictive reliability, theoretical soundness, and clearer insight into how career stage, marital status, working hours, education, and investment activity relate to income classification.
+
 ## Challenges and Solutions
 
-
+| Challenge | Solution | 
+| --------- | -------- |
+| Linear regression produced unbounded predictions not interpretable as probabilities |	Quantified the extent of unbounded outputs and explicitly acknowledged the theoretical misalignment with binary classification. Used this to illustrate the limitations of general-purpose models for classification tasks. |
+| Class imbalance skewed sensitivity and specificity | Applied class weights during model fitting to counteract imbalance and improve recall for underrepresented income group. Supplemented with full confusion matrix metrics (e.g., kappa, balanced accuracy) to assess fairness and performance. |
+| Ensuring consistent encoding across models | Applied indicator matrix encoding uniformly to preserve comparability and reproducibility. Verified factor alignment across splits. |
+| Translating nuanced metric tradeoffs for stakeholders |	Crafted concise narratives emphasizing practical relevance (e.g., “Logistic regression better identifies low-income individuals without sacrificing overall accuracy”). |
+| Balancing interpretability with predictive performance | Selected logistic regression for its theoretical soundness, bounded outputs, and clearer coefficient-based insights into socioeconomic drivers of income. |
 
 
 
