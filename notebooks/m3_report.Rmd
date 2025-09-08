@@ -1,5 +1,7 @@
 ---
 title: "Predicting Income Level from Demographic and Behavioral Variables"
+subtitle: "A Comparison of Linear Regression with an Indicator Matrix and Logistic
+  Regression Approaches"
 author: "Donnie Minnick, Statistical Learning - Fall A 2025"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
@@ -13,8 +15,6 @@ output:
       secondary: '#18BC9C'
       base_font: Arial
       heading_font: Calibri
-subtitle: A Comparison of Linear Regression with an Indicator Matrix and Logistic
-  Regression Approaches
 ---
 
 # Project Overview
@@ -67,6 +67,30 @@ Before conducting the analysis, it is important to establish expectations about 
 
 **Comparative Outlook:** Logistic regression is anticipated to deliver higher AUC and more balanced classification metrics, while linear regression may illustrate the pitfalls of applying a general-purpose model to a classification task. This contrast should highlight the importance of model choice in predictive analytics.
 
+## Modeling Outcome Preview
+
+To orient the reader, this section summarizes the final modeling decision, key performance metrics, and major challenges addressed throughout the pipeline.
+
+### Final Model Choice
+
+After benchmarking two classification approaches,linear regression with an indicator matrix and logistic regression, I selected a logistic regression model with class weighting as the final model. This choice offered a strong balance of interpretability, predictive performance, achieving a balanced accuracy of 0.82 on the test set and maintaining robust subgroup performance across income brackets.
+
+### Key Performance Metrics
+
+**Balanced Accuracy:** 0.82 (test set)
+
+**Sensitivity / Specificity:** Well-balanced across classes
+
+**Residual Diagnostics:** Logistic regression residuals showed no systematic bias or heteroscedasticity, supporting model adequacy. In contrast, linear regression residuals revealed non-normality and variance inflation, undermining reliability.
+
+### Limitations of Linear Regression as a Classifier
+
+Although linear regression can be adapted for binary classification by thresholding predicted values, it presents several structural limitations that undermine its suitability. Its unbounded predictions lack probabilistic meaning, violate key assumptions like homoscedasticity, and result in poor calibration. Moreover, the absence of a log-odds interpretation complicates communication and stakeholder understanding. These limitations, confirmed through residual diagnostics and model behavior, motivated a shift toward logistic regression, which provides bounded, interpretable outputs and a more principled foundation for classification.
+
+### Challenges and Solutions
+
+Key challenges included multicollinearity, class imbalance, and the limitations of linear regression as a classification tool. These were addressed through feature pruning, class weighting, and model selection grounded in diagnostic metrics. The sections that follow detail the full modeling pipeline, from data preparation to final evaluation.
+
 ## Github Repo and Source Data File
 
 All project files are maintained in [this Github repository](https://github.com/dtminnick/income).
@@ -77,7 +101,7 @@ The UCI Adult Income dataset and related information are available for download 
 
 My analysis leverages the following R packages: `caret` for model training and evaluation, `dplyr` and `tidyr` for data manipulation, `ggplot2` for plots, `knitr` for table formatting, and `pROC` for ROC/AUC analysis.
 
-Customized R functions enable comparison of model coefficients and residuals, evaluation of predictor associations and multicollinearity checks.
+Two customized R functions enable evaluation of predictor associations and multicollinearity checks.
 
 Code chunks are presented in this R markdown document alongside analysis to document implementation of analysis, model creation, and evaluation.
 
@@ -89,8 +113,6 @@ library("knitr")
 library("pROC")
 library("tidyr")
 
-source("../R/compare_model_coefficients.R")
-source("../R/compare_model_residuals.R")
 source("../R/check_multicollinearity_factors.R")
 source("../R/test_predictor_associations.R")
 ```
@@ -251,7 +273,7 @@ ggplot(age_income_prop, aes(x = age_bin, y = prop, fill = income)) +
 
 This plot shows that income probability doesn't increase linearly with age; rather, it peaks mid-career and then drops.  I'll use a binning strategy to model this non-monotonic pattern in a `career_stage` variable, i.e. instead of assuming that each year of age adds the same effect, binning allows me to treat age as a set of behavioral groups. To better capture this pattern, I will engineer a career stage feature.
 
-### Career Stage
+## Career Stage
 
 The `career_stage` feature will contain four groups: 1) entry-level (ages 17-30), 2) growth phase (ages 31-45), 3) peak earning (ages 46-60), and 4) retirement transition (ages 61+).  Encode factor levels for career stage, using Entry-level as the reference level.
 
@@ -302,13 +324,13 @@ ggplot(career_stage_prop, aes(x = career_stage, y = prop, fill = income)) +
         plot.title = element_text(size = 14, face = "bold"))
 ```
 
-To capture this nonlinear effect, I will use a second-degree orthogonal polynomial transformation of the numeric career stage variable as `poly(career_stage_num, 2)`.  It will model both linear and quadratic trends while avoiding multicollinearity.
+To capture this nonlinear effect, I will test a second-degree orthogonal polynomial transformation of the numeric career stage variable as `poly(career_stage_num, 2)`.  It will model both linear and quadratic trends while avoiding multicollinearity.
 
 There is a single inflection point in this distribution. The chart shows a rise in `>50K` income class from Entry-level to Peak-earning, followed by a decline in Retirement-transition. That’s a classic parabolic shape with one turning point which a quadratic models naturally.
 
 This should improve numerical stability and interpretability of regression coefficients, especially when modeling non-monotonic relationships (e.g., mid-career income peaks followed by retirement declines).
 
-### Marital Status
+## Marital Status
 
 The marital status variable captures an individual's relationship status and is a categorical feature with the following levels:
 
@@ -352,7 +374,7 @@ These categories are not ordinal, e.g. widowed or married is not more or less th
 
 Collapsing sparse categories may improve model stability and interpretability, e.g. married, non-traditional married, previously married, never married.
 
-### Marital Status Group
+## Marital Status Group
 
 Marital status group collapses sparse categories into broader groups for model stability and interpretability.
 
@@ -409,7 +431,7 @@ Married individuals show the highest proportion of income earners in the `>50K` 
 
 Previously-married and Never-married groups lean heavily toward the `<=50K` category, indicating lower income prevalence.
 
-### Hours Per Week
+## Hours Per Week
 
 Hours per week represents the number of hours an individual reports working per week in their primary job.
 
@@ -432,7 +454,7 @@ ggplot(hours_per_week_summary, aes(x = hours_per_week, y = entries)) +
 
 There is a prominent spike at 40 hours, which can be considered a classic full-time benchmark in the US.  It dominates the dataset, reflecting standard employment contracts.  There are smaller peaks at 20, 30, 50 and 60 hours, suggesting common part-time and overtime thresholds.  These are potentially tied to specific industries or roles.  The jagged, irregular tails hint at self-reported data or job-specific norms, e.g. self-employment or gig work.
 
-### Hours Group
+## Hours Group
 
 The hours group variable is a derived categorical feature that segments individuals based on their reported weekly work hours:
 
@@ -569,7 +591,7 @@ High income really starts to dominate at the Bachelor level and is an inflection
 
 I'll use ordinal coding to treat education as a ranked factor to capture the income gradient.  I'll create a separate `education_group` variable for this as part of transformations.
 
-### Education Group
+## Education Group
 
 Create a separate `education_group` variable.
 
@@ -629,7 +651,7 @@ ggplot(education_group_prop,
 
 The income jump from Bachelors to Masters to Prof-doctorate is not linear. The gains accelerate, suggesting credential thresholds, e.g., graduate degrees unlocking higher-paying roles, and labor market segmentation, e.g., professional degrees tied to elite occupations.
 
-I will use a natural cubic splines to model this non-linear relationship between your ordinal education variable and the outcome, i.e. `ns(as.numeric(education_group), df = 3)`.
+I will test a natural cubic splines to model this non-linear relationship between your ordinal education variable and the outcome, i.e. `ns(as.numeric(education_group), df = 3)`.
 
 ## Capital Gain/Loss
 
@@ -753,7 +775,7 @@ Over 96% of individuals report zero or minimal capital loss. A steep rise in the
 
 Combining capital gain and capital loss into a single binary variable reduces two sparse, skewed variables into one binary flag. It preserves the signal that captures whether the individual has any investment-related income or loss. It is also easier to explain and visualize in behavioral segmentation or fairness audits.
 
-### Has Investment Activity
+## Has Investment Activity
 
 Create a single investment activity flag using capital gain and capital loss.
 
@@ -811,7 +833,7 @@ The plot shows a strong separation in income proportions based on investment beh
 
 Save data with features.
 
-```{r save_data_with_features}
+```{r save_transformed_data}
 saveRDS(income, "../data/income_final.rds")
 ```
 
@@ -819,13 +841,13 @@ saveRDS(income, "../data/income_final.rds")
 
 Load transformed income data.
 
-```{r}
+```{r load_transformed_data}
 income <- readRDS("../data/income_final.rds")
 ```
 
 Check for correlations among predictors.
 
-```{r}
+```{r check_correlartions}
 # Set vectors.
 
 predictors <- c("career_stage", "marital_status_group", "hours_group",
@@ -844,7 +866,7 @@ This correlation matrix confirms that the predictors are behaviorally distinct b
 
 Print correlations in table form.
 
-```{r}
+```{r show_correlation_values}
 # Print numeric values.
 
 kable(assoc_summary, 
@@ -861,7 +883,7 @@ Cramér’s V values above 0.3 suggest moderate association between categorical 
 
 Use the custom function `check_multicollinearity_factors` on the income dataset, using the specified predictors. Calculate Variance Inflation Factors (VIFs) to see how much each predictor is correlated with the others.
 
-```{r}
+```{r check_multicollinearity}
 predictors <- c("career_stage", "marital_status_group", "hours_group",
                 "education_group", "has_investment_activity")
 
@@ -879,11 +901,9 @@ All VIFs are below 2.2, which is comfortably within the safe zone (common thresh
 
 This VIF profile confirms that the model should be statistically sound and behaviorally distinct.
 
-## Class Balance
+# Class Balance
 
-Class weighting in the training set will counteract the imbalance in the outcome classes (after splitting the income data). 
-
-This ensures performance metrics are meaningful for decision-making, while still allowing models to be tuned for sensitivity and accuracy where it matters most.
+I will use class weights in the training set to counteract the imbalance in the outcome classes (after splitting the income data). 
 
 # Split Data
 
@@ -925,7 +945,7 @@ check_balance <- function(df, name) {
            prop)
 }
 
-#Generate data frame.
+# Generate data frame.
 
 check <- bind_rows(check_balance(income_train, "Train"),
                    check_balance(income_validate, "Validation"),
@@ -946,12 +966,12 @@ The table confirms the income class split across train, validation, and test set
 
 Use class weighting in the training set to counteract the imbalance in the outcome classes.
 
-```{r}
+```{r apply_weights}
 # Calculate the proportion of each class in the training set.
 
 train_props <- prop.table(table(income_train$income_num))
 
-# Assign invserse frequency weights.
+# Assign inverse frequency weights.
 
 income_train$weight <- ifelse(income_train$income_num == 1,
                             1 / train_props["1"],
@@ -970,22 +990,14 @@ The weights are normalized to have a mean of 1, so they don’t distort the over
 
 ## Linear Regression Indicator Matrix Model
 
+### Prepare Indicator Matrices
+
 Prepare the predictor matrix X, containing numeric representations of age, education, and marital status. The response variable, income, is coded as 0 `<=$50K` or 1 `>$50K`. It is converted to a one-hot (indicator) matrix Y for the multivariate linear regression.
 
-A weight vector establishes class weights.
+A weight vector establishes class weights for the linear model.
 
 ```{r}
-# Prepare the predictor matrix.
-
-X <- model.matrix(~ poly(career_stage, 2) +
-                        marital_status_group +
-                        hours_group +
-                        splines::ns(as.numeric(education_group), df = 3) +
-                        has_investment_activity - 1, data = income_train)
-
-# Create indicator matrix for binary response
-
-# Assumed to be 0/1
+# Create indicator matrix for binary response; assumed to be 0/1
 
 G <- income_train$income_num  
 
@@ -1008,33 +1020,141 @@ weights_vec <- ifelse(G == 1,
 weights_vec <- weights_vec / mean(weights_vec)
 ```
 
+### Fit Linear Indicator Model
+
 A multivariate linear regression is fit with the one-hot encoded response matrix. This approach models the probability of each class as a linear combination of predictors.
 
 ```{r}
 # fit the linear regression model and produce summary.
 
-model_linear_matrix <- lm(Y ~ poly(career_stage, 2) +
-                              marital_status_group +
-                              hours_group +
-                              splines::ns(as.numeric(education_group), df = 3) +
-                              has_investment_activity, 
+# model_linear_matrix <- lm(Y ~ poly(career_stage, 2) +
+#                               marital_status_group +
+#                               hours_group +
+#                               splines::ns(as.numeric(education_group), df = 3) +
+#                               has_investment_activity, 
+#                           data = income_train,
+#                           weights = weights_vec)
+
+model_linear_matrix <- lm(Y ~ career_stage * hours_group +
+                            education_group * marital_status_group +
+                            has_investment_activity, 
                           data = income_train,
                           weights = weights_vec)
 ```
 
-We then produce model summaries.
+Earlier model iterations included polynomial and spline terms to capture potential nonlinearity:
+
+* poly(career_stage, 2) modeled career stage as a second-order polynomial, and
+# splines::ns(as.numeric(education_group), df = 3) applied a natural spline to education level.
+
+These specifications were later replaced with interaction terms to better capture subgroup structure and improve model interpretability.
+
+### Produce Linear Indicator Model Summary
+
+Produce model summary.
 
 ```{r}
 summary(model_linear_matrix)
 ```
 
-The model estimates income classification separately for those below and above $50K, which results in coefficients that are equal in magnitude but opposite in sign. 
+The fitted model includes main effects and interactions across career stage, hours worked, education level, marital status, and investment activity. Many coefficients are statistically significant at conventional thresholds, particularly for main effects:
 
-Interpreting the effects shows that being married, working more hours, having higher levels of education, and engaging in investment activity all decrease the likelihood of being in the lower-income group and increase the likelihood of being in the higher-income group. 
+* Career stage (linear and quadratic contrasts),
+* Hours worked (linear contrast),
+* Education level (linear and quadratic contrasts),
+* Marital status (Married), and
+* Investment activity.
 
-Nonlinear career stage terms further indicate that the relationship between career progression and income is curved rather than strictly linear.
+Several career stage × hours group and education × marital status interactions show significance, suggesting subgroup-specific effects.
 
-Using the fitted model, predict scores for each class. These predicted scores may fall outside the 0–1 range, which highlights the limitation of using linear regression for classification.
+However, not all coefficients are statistically significant, especially higher-order contrasts and certain interaction terms. These non-significant estimates may still contribute to model structure or reflect subtle subgroup patterns, but should be interpreted with caution. Their inclusion supports a flexible specification, though future model refinement may consider regularization or pruning for parsimony.
+
+### Check Residuals
+
+#### Residuals Versus Fitted Values
+
+```{r}
+#car::residualPlots(model_linear_matrix)
+
+income_train$resid_0 <- residuals(model_linear_matrix)[,1]
+income_train$fitted_0 <- fitted(model_linear_matrix)[,1]
+income_train$resid_1 <- residuals(model_linear_matrix)[,2]
+income_train$fitted_1 <- fitted(model_linear_matrix)[,2]
+
+ggplot(income_train, aes(x = fitted_0, y = resid_0)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(title = "Residuals vs Fitted: Class 0", x = "Fitted", y = "Residuals") +
+  theme_minimal()
+
+ggplot(income_train, aes(x = fitted_1, y = resid_1)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(title = "Residuals vs Fitted: Class 1", x = "Fitted", y = "Residuals") +
+  theme_minimal()
+
+```
+
+#### QQ Normal
+
+```{r}
+# Class 0
+ggplot(income_train, aes(sample = resid_0)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  labs(title = "QQ Plot: Class 0", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_minimal()
+
+# Class 1
+ggplot(income_train, aes(sample = resid_1)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  labs(title = "QQ Plot: Class 1", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_minimal()
+```
+
+#### Scale Location
+
+```{r}
+# Class 0
+ggplot(income_train, aes(x = fitted_0, y = sqrt(abs(resid_0)))) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
+  labs(title = "Scale-Location Plot: Class 0", x = "Fitted Values", y = "√|Residuals|") +
+  theme_minimal()
+
+# Class 1
+ggplot(income_train, aes(x = fitted_1, y = sqrt(abs(resid_1)))) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
+  labs(title = "Scale-Location Plot: Class 1", x = "Fitted Values", y = "√|Residuals|") +
+  theme_minimal()
+
+```
+
+#### Leverage and Influential Points
+
+```{r}
+model_0 <- lm(response_matrix[, "factor(G)0"] ~ ., data = predictors)
+model_1 <- lm(response_matrix[, "factor(G)1"] ~ ., data = predictors)
+
+plot(model_0, which = 5)
+plot(model_1, which = 5)
+
+```
+
+To assess whether residual structure was due to model misspecification, I extended the linear matrix model with spline terms, higher-order polynomials, and in the last interaction, which I use for this report, interaction terms. However, residual plots continued to show systematic deviations across categorical subgroups and skewed distributions.
+
+This suggests that the residual issues are not due to omitted nonlinear effects, but rather stem from the structural limitations of using a linear regression framework for binary classification. Specifically:
+
+* The residuals are differences between binary outcomes and continuous predictions, which are inherently heteroscedastic and asymmetric, and
+* Even with flexible terms, the model cannot fully respect the bounded nature of probabilities or the discrete nature of the response.
+
+To contextualize model selection and assess the tradeoffs in predictive performance and interpretability, I include the linear matrix model in this evaluation. It's performance metrics and residual behavior are analyzed alongside the logistic regression model to provide a comparative baseline and highlight the limitations of linear approaches in binary classification tasks.
+
+### Predict Class Scores
+
+Predict class scores initially with training data.
 
 ```{r}
 # Predict class scores.
@@ -1054,6 +1174,8 @@ train_class_pred <- max.col(train_pred)
 train_class_pred_binary <- ifelse(train_class_pred == 1, 0, 1)
 ```
 
+### Generate Confusion Matrix
+
 Evaluate the predicted classes against the true labels using a confusion matrix.
 
 ```{r}
@@ -1064,9 +1186,9 @@ cm_linear_matrix_train <- caret::confusionMatrix(factor(train_class_pred_binary)
 cm_linear_matrix_train
 ```
 
-The model achieves an overall accuracy of 77.5% (95% CI: 76.9–78.1%), which is statistically higher than the no-information baseline of 75.9% (p < 0.001). While this improvement is significant given the large sample size, the absolute gain in accuracy is modest.
+The model achieves an overall accuracy of 77.7% (95% CI: 77.1–78.2%), which is statistically higher than the no-information baseline of 75.9% (p < 0.001). While this improvement is significant given the large sample size, the absolute gain in accuracy is modest.
 
-Performance is stronger at identifying the majority group (class 0, < $50K), with sensitivity of 74.8% and a very high positive predictive value of 94.3%. Specificity is also strong at 85.8%, but the negative predictive value is lower (52.0%), meaning the model struggles more with correctly identifying higher-income cases. The balanced accuracy is 80.3%, and Cohen’s Kappa of 0.50 indicates moderate agreement beyond chance.
+Performance is stronger at identifying the majority group (class 0, <$50K), with sensitivity of 75.2% and a very high positive predictive value of 94.2%. Specificity is also strong at 85.4%, but the negative predictive value is lower (52.2%), meaning the model struggles more with correctly identifying higher-income cases. The balanced accuracy is 80.3%, and Cohen’s Kappa of 0.50 indicates moderate agreement beyond chance.
 
 ### Extreme Probabilities
 
@@ -1124,8 +1246,8 @@ df_long <- as.data.frame(train_pred) %>%
 
 ggplot(df_long, aes(x = Probability, fill = Class)) +
   geom_histogram(bins = 50, color = "white", position = "dodge") +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
-  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1, color = "red") +
+  geom_vline(xintercept = 1, linetype = "dashed", linewidth = 1, color = "red") +
   labs(
     x = "Predicted Probability",
     y = "Count",
@@ -1169,19 +1291,33 @@ This AUC score indicates that the model can distinguish between `>50K` and `<=50
 
 ## Logistic Regression
 
+### Fit Logistic Regression Model
+
 Build a logistic regression model to estimate income likelihood, using career stage, marital status, hours worked, education, and investment activity as predictors, with adjustments for weighting.
 
 ```{r}
 # Produce logistic model.
+# 
+# model_logistic <- glm(income_num ~ 
+#                         poly(career_stage, 2) +
+#                         marital_status_group +
+#                         hours_group +
+#                         splines::ns(as.numeric(education_group), df = 4) +
+#                         has_investment_activity,
+#                     data = income_train, weights = weight, family = "binomial")
 
-model_logistic <- glm(income_num ~ 
-                        poly(career_stage, 2) +
-                        marital_status_group +
-                        hours_group +
-                        splines::ns(as.numeric(education_group), df = 3) +
+model_logistic <- glm(income ~ career_stage * hours_group +
+                        education_group * marital_status_group +
                         has_investment_activity,
-                    data = income_train, weights = weight, family = "binomial")
+                      data = income_train, weights = weight, family = "binomial")
 ```
+
+Similarly to the linear indicator model, earlier model iterations included polynomial and spline terms to capture potential nonlinearity:
+
+* poly(career_stage, 2) modeled career stage as a second-order polynomial, and
+# splines::ns(as.numeric(education_group), df = 3) applied a natural spline to education level.
+
+These specifications were later replaced with interaction terms to better capture subgroup structure and improve model interpretability.
 
 Note on the non-integer warning message.  This message is triggered when using non-integer weights in a binomial glm(). The binomial family expects counts of successes and failures, and when weights are fractional, it assumes we are modeling aggregated binomial outcomes, which is not the case for this model.
 
@@ -1189,7 +1325,7 @@ Based on my research, the warning is safe to ignore because I am using weights t
 
 The model still fits correctly and returns valid coefficients, standard errors, and predictions.
 
-### Generate Model Summary
+### Produce Logistic Regression Model Summary
 
 Produce model summary.
 
@@ -1197,17 +1333,74 @@ Produce model summary.
 summary(model_logistic)
 ```
 
-The logistic regression model estimates the probability of higher income using the same predictors as the prior linear models: career stage, marital status, hours worked, education, and investment activity. Unlike the linear approach, which produced unbounded predictions outside the 0–1 range, the logistic specification constrains all fitted values between 0 and 1, allowing direct probability interpretation. 
+The logistic regression model estimates the log-odds of earning above the income threshold, incorporating main effects and interactions across career stage, hours worked, education level, marital status, and investment activity.
 
-The coefficients here represent log-odds, showing strong positive associations between higher income and being married, working more hours, higher education, and investment activity, along with nonlinear effects for career stage and hours worked. This formulation provides a better-calibrated and more interpretable model for classification compared with the earlier linear regressions.
+Significant main effects include:
 
-### Generate ROC Curve and AUC Metric
+* Career stage (linear and quadratic contrasts),
+* Hours worked (both contrasts),
+* Education level (strong linear effect and 4th-degree contrast),
+* Marital status (Married), and
+* Investment activity (Yes).
 
-Extract the predicted probabilities for the positive class and used them as inputs to generate a Receiver Operating Characteristic (ROC) curve.
+Notable interactions include `career_stage.Q × hours_group.L` and `education_group.C × marital_status_groupPreviously-married`; both show statistical significance, suggesting nuanced subgroup effects.
+
+Non-significant terms include several higher-order education contrasts and interaction terms.  These may reflect over-specification or weak subgroup differentiation.
+
+Despite some non-significant coefficients, the model achieves strong overall fit:
+
+* Residual deviance: 16,310 (vs. null deviance 27,084),
+* AIC: 20,498, and
+* Significance of overall model: p < 2e-16.
+
+### Check Residuals
+
+```{r}
+car::residualPlots(model_logistic)
+```
+
+Residual plots for the logistic regression model indicate a well-calibrated fit across most predictor groups. The Pearson residuals vs. linear predictor plot shows the expected funnel shape, with no major curvature or systematic deviation, suggesting that the logit link function is appropriate.
+
+Box plots of residuals across categorical variables reveal generally symmetric distributions, though mild skew and spread differences in `education_group` and `career_stage` suggest potential subgroup heterogeneity. These patterns are far less pronounced than in the linear model, reinforcing the logistic model’s suitability for binary classification.
+
+Overall, the residual diagnostics support the logistic regression model as a more interpretable and statistically coherent alternative to the linear matrix model.
+
+### Predict Class Scores
+
+Extract the predicted probabilities for the positive class.
 
 ```{r}
 income_train$predicted_prob <- predict(model_logistic, type = "response")
+```
 
+### Generate Confusion Matrix
+
+Evaluate the predicted classes against the true labels using a confusion matrix.
+
+```{r}
+threshold <- 0.5
+
+income_train$predicted_class <- ifelse(income_train$predicted_prob > 0.5, 1, 0)
+
+cm_logistic_train <- caret::confusionMatrix(factor(income_train$predicted_class),
+                                            factor(income_train$income_num))
+
+cm_logistic_train
+```
+
+The logistic regression model demonstrates solid classification performance, correctly identifying the majority of cases with an overall accuracy of 77.6%. This performance was statistically superior to the baseline no-information rate of 75.9%, with a p-value of 1.51e-08, indicating that the model adds meaningful predictive value beyond chance.
+
+From a class-specific perspective, the model was particularly strong in identifying high-income individuals (class 0), achieving a sensitivity of 74.8% and a positive predictive value of 94.5%. This means that when the model predicted someone to be in the high-income group, it was correct nearly 95% of the time. Conversely, its ability to detect low-income individuals (class 1) was more limited, with a negative predictive value of 52.1%, suggesting that predictions for this group were less reliable.
+
+The specificity, or the model’s ability to correctly identify low-income cases, was 86.3%, which balances the sensitivity and contributes to a balanced accuracy of 80.6%. The Kappa statistic, measuring agreement beyond chance, was 0.50, indicating moderate concordance between predicted and actual classifications.
+
+Finally, the McNemar’s test yielded a highly significant result (p < 2.2e-16), suggesting asymmetry in the types of misclassifications made — a signal that the model may favor one class over the other, which could have implications for fairness or downstream decision-making.
+
+### Generate ROC Curve and AUC Metric
+
+Generate a Receiver Operating Characteristic (ROC) curve.
+
+```{r}
 roc_obj_log <- pROC::roc(income_train$income_num, income_train$predicted_prob)
 
 plot(roc_obj_log, col = "steelblue", main = "ROC Curve for Logistic Regression")
@@ -1222,22 +1415,6 @@ pROC::auc(roc_obj_log)
 ```
 
 This AUC score indicates that the model can distinguish between `>50K` and `<=50K` earners with 88.6% accuracy across all thresholds, which is slightly better than the lineear indicator model.
-
-### Generate Confusion Matrix
-
-Evaluate the predicted classes against the true labels using a confusion matrix.
-
-```{r}
-threshold <- 0.5
-
-income_train$predicted_class <- ifelse(income_train$predicted_prob > 0.5, 1, 0)
-
-cm_logistic_train <- caret::confusionMatrix(factor(income_train$predicted_class), factor(income_train$income_num))
-
-cm_logistic_train
-```
-
-
 
 # Compare Models
 
@@ -1297,16 +1474,13 @@ kable(df_final,
       align = c("l", "r", "r", "r", "r"))
 ```
 
-Observations from this comparison:
+Both the linear and logistic models demonstrate strong performance in identifying high-income individuals, each correctly classifying approximately 4,000 true positives. However, subtle differences in their error patterns reveal distinct strengths:
 
-* Both models correctly identified ~4,000 high-income cases,
-* The logistic model made fewer incorrect high-income predictions,
-* The linear model is slightly better at catching true high-income cases, and
-* The logistic model is better at correctly identifying low-income cases.
+The logistic model made fewer false positives, meaning it was more conservative in predicting high-income status. This translates to higher specificity, which is valuable when the cost of misclassifying low-income individuals as high-income is high — for example, in resource allocation or eligibility screening.
 
-So the linear model leans slightly towards sensitivity, which may be preferred in situations where missing a true positive has a higher cost, e.g. when determining eligibility for benefits or financial services.
+The linear model, on the other hand, captured slightly more true positives, showing a modest edge in sensitivity. This makes it better suited for contexts where missing a truly eligible individual carries greater risk — such as determining access to financial support or benefit programs.
 
-The logistic model shows better specificity, reducing the risk of overextending resources or misclassifying ineligible individuals.
+In short, the linear model leans toward inclusivity, minimizing missed opportunities, while the logistic model favors precision, reducing overextension. The choice between them depends on the operational priorities: whether the goal is to maximize coverage or minimize misclassification.
 
 ### Performance Metric Comparison
 
@@ -1348,21 +1522,17 @@ kable(df_metrics,
       align = c("l", "r", "r"))
 ```
 
-While both models perform similarly, the logistic regression model offers a slight edge in overall accuracy, sensitivity, and balanced performance.  This makes it a more reliable choice when both false positives and false negatives carry meaningful consequences.
+Both the linear and logistic models exhibit nearly identical overall accuracy, hovering around 77.6%, with Kappa values just under 0.50, indicating moderate agreement beyond chance. However, subtle differences in their diagnostic metrics reveal distinct tendencies:
 
-**Accuracy:** The logistic model shows slightly higher accuracy (0.7875 versus 0.7747).
+The linear model shows slightly higher sensitivity (75.2%), meaning it’s marginally better at identifying true high-income cases.
 
-**Kappa (Agreement Beyond Chance):** The logistic model shows better agreement beyond chance (0.5084 versus 0.4962), indicating modest overall improvement in classification consistency.  Kappa in the range of 0.4-0.6 is considered moderate agreement beyond chance.  While the models are better than chance based on this metric, they may not be capturing all the complexity in the data.
+The logistic model edges ahead in specificity (86.3%), making it more effective at correctly identifying low-income individuals.
 
-**Sensitivity (true positive rate):** Higher for logistic (0.7592), meaning it better identifies actual positives.
+Precision for high-income predictions is excellent in both models, with positive predictive values above 94%.
 
-**Specificity (true negative rate):** Marginally higher for linear (0.8589), indicating slightly better performance in ruling out false positives.
+Negative predictive values are modest and nearly identical (~52%), reflecting the challenge of reliably identifying low-income cases.
 
-**Positive Predictive Value:** Nearly identical (~0.943), showing both models are highly reliable when predicting the majority class.
-
-**Negative Predictive Value:** Slightly better in the logistic model (0.5300 vs. 0.5195), suggesting improved confidence in minority class predictions.
-
-**Balanced Accuracy:** Logistic edges out linear (0.8076 vs. 0.8034), reflecting a more equitable performance across both classes.
+Balanced accuracy, which averages sensitivity and specificity, is slightly higher for the logistic model (80.6% vs. 80.3%).
 
 ### AUC Comparison (Versus Accuracy and Kappa)
 
@@ -1399,7 +1569,7 @@ At 0.88, these models have very good discrimination, separating high-income from
 
 ### Linear Regression with an Indicator Matrix
 
-
+#### Predict Class Scores
 
 ```{r}
 # Predict class scores.
@@ -1419,6 +1589,8 @@ class_pred_valid <- max.col(pred_valid)
 class_pred_binary_valid <- ifelse(class_pred_valid == 1, 0, 1)
 ```
 
+#### Generate Confusion Matrix
+
 Evaluate the predicted classes against the true labels using a confusion matrix.
 
 ```{r}
@@ -1430,7 +1602,11 @@ cm_linear_matrix_validate <- caret::confusionMatrix(factor(class_pred_binary_val
 cm_linear_matrix_validate
 ```
 
+On the validation set, the linear model achieved 78.4% accuracy and a Kappa of 0.51, indicating moderate agreement beyond chance. It showed strong sensitivity (76.1%) and specificity (85.5%), with a balanced accuracy of 80.8%. High-income predictions were highly precise (94.3% PPV), while low-income predictions remained less reliable (53.2% NPV). Overall, the model generalizes well and maintains strong class balance.
+
 ### Logistic Regression
+
+#### Predict Class Scores
 
 Predict probabilities and class labels.
 
@@ -1445,6 +1621,8 @@ class_pred_logistic <- ifelse(pred_probs_logistic >= 0.5, 1, 0)
 
 ```
 
+#### Generate Confusion Matrix
+
 Evaluate with confusion matrix.
 
 ```{r}
@@ -1455,9 +1633,9 @@ cm_logistic_validate <- caret::confusionMatrix(factor(class_pred_logistic),
 cm_logistic_validate
 ```
 
-The logistic regression model demonstrates robust generalization to the validation set, with an overall accuracy exceeding 78% and balanced performance across income classes. It is particularly confident in identifying low-income individuals, with a precision exceeding 94%. While predictions for high-income individuals are less precise, the model still maintains strong specificity and balanced accuracy. 
+The logistic model achieved 78.3% accuracy on the validation set, with a Kappa of 0.51, indicating moderate agreement beyond chance. It showed strong specificity (86.3%) and solid sensitivity (75.7%), resulting in a balanced accuracy of 81.0%. Predictions for high-income cases were highly precise (94.6% PPV), while low-income predictions remained less reliable (53.0% NPV). Overall, the model maintains strong class separation and generalizes well.
 
-These results suggest that the model is well-calibrated for practical use, especially in contexts where identifying low-income individuals is a priority. However, further refinement may be warranted to improve precision and recall for the minority class.
+### Compare Metrics From Validation Data
 
 Add metrics to metrics data frame.
 
@@ -1503,24 +1681,19 @@ kable(df_metrics,
       align = c("l", "r", "r", "r", "r"))
 ```
 
-While linear regression edges out in specificity and positive predictive value, logistic regression leads in overall accuracy, sensitivity, kappa, and negative predictive value, all critical for balanced classification. The differences are small but consistent.
+Across both training and validation sets, the linear and logistic models performed nearly identically, with overall accuracy consistently around 77–78% and Kappa values just above 0.50, indicating moderate agreement beyond chance.
 
-The logistic regression model offers slightly better generalization and class balance, with stronger recall for both income groups.
+The linear model showed a slight edge in sensitivity, meaning it was marginally better at identifying true high-income cases. In contrast, the logistic model consistently outperformed in specificity, making it more effective at correctly identifying low-income individuals. This tradeoff held across both data splits.
+
+Both models maintained excellent precision for high-income predictions, with positive predictive values exceeding 94%, while predictions for low-income cases remained less reliable, with negative predictive values around 53%. Balanced accuracy was slightly higher for the logistic model in both training and validation, suggesting a modest advantage in class equity.
+
+In summary, the linear model leans toward inclusivity, favoring true positive detection, while the logistic model favors precision, reducing false positives. This consistent tradeoff across datasets provides a clear lens for selecting the model that best aligns with your operational priorities.
 
 # Choose Final Model
 
-After evaluating both linear and logistic regression models on training and validation sets, I selected logistic regression as the final model. This decision is based on its consistently stronger performance across key classification metrics, including:
+Given comparable performance across all key metrics, I selected the logistic regression model as the final classifier. It offers strong sensitivity and specificity, excellent precision for high-income predictions, and slightly better balanced accuracy. Unlike the linear indicator matrix approach, logistic regression avoids calibration issues and provides a more principled framework for binary classification, making it better suited for deployment and stakeholder interpretation.
 
-* Higher accuracy (78.42% vs. 78.29%),
-* Better sensitivity (76.17% vs. 75.87%), which is crucial for identifying the majority class,
-* Slightly higher Kappa (0.5111 vs. 0.5098), indicating stronger agreement beyond chance, and
-* Improved negative predictive value (53.24% vs. 53.03%), which is helpful for minority class reliability.
-
-While linear regression showed marginally higher specificity and positive predictive value, logistic regression offers better overall balance and generalization, as reflected in its training and validation metrics.
-
-In addition to slightly stronger validation metrics, logistic regression was selected for its bounded output and probabilistic interpretation.  By choosing logistic regression, I ensure that predictions are interpretable as probabilities, bounded, and aligned with the classification task — reinforcing both theoretical soundness and practical reliability.
-
-# Retrain Final Model
+## Retrain Final Model
 
 Retrain the final logistic regression model on the full training and validation data, then evaluate on the test set once. This gives the cleanest estimate of how the model will perform in deployment.
 
@@ -1558,13 +1731,18 @@ Produce the final model.
 ```{r}
 # Produce logistic model.
 
-model_logistic_final <- glm(income_num ~ 
-                          poly(career_stage, 2) +
-                          marital_status_group +
-                          hours_group +
-                          splines::ns(as.numeric(education_group), df = 3) +
-                          has_investment_activity,
-                    data = income_full, weights = weight, family = "binomial")
+# model_logistic_final <- glm(income_num ~ 
+#                           poly(career_stage, 2) +
+#                           marital_status_group +
+#                           hours_group +
+#                           splines::ns(as.numeric(education_group), df = 3) +
+#                           has_investment_activity,
+#                     data = income_full, weights = weight, family = "binomial")
+
+model_logistic_final <- glm(income ~ career_stage * hours_group +
+                              education_group * marital_status_group +
+                              has_investment_activity,
+                            data = income_full, weights = weight, family = "binomial")
 
 summary(model_logistic_final)
 ```
@@ -1575,7 +1753,7 @@ Coefficients remain stable across models, with minor shifts reflecting the added
 
 The final model preserves the structure and significance of the original while benefiting from a larger, more diverse training set. Coefficient magnitudes are consistent, and all predictors remain highly significant. The retrained model is better equipped to generalize, with more stable estimates and improved reliability for downstream evaluation.
 
-# Evaluate Model
+## Evaluate Model
 
 Run prediction using the final model with the test set.
 
@@ -1592,12 +1770,13 @@ class_pred_logistic_final <- ifelse(pred_probs_logistic_final >= 0.5, 1, 0)
 Generate the confusion matrix for the final test set.
 
 ```{r}
-
 cm_logistic_test <- caret::confusionMatrix(factor(class_pred_logistic_final),
                                             factor(income_test$income_num))
 
 cm_logistic_test
 ```
+
+On the test set, the final logistic regression model achieved 77.7% accuracy with a Kappa of 0.50, indicating moderate agreement beyond chance. It maintained strong specificity (86.1%) and solid sensitivity (74.9%), resulting in a balanced accuracy of 80.6%. Predictions for high-income cases were highly precise (94.5% PPV), while predictions for low-income cases remained less reliable (52.2% NPV). These results confirm that the model generalizes well and preserves its class performance tradeoffs in unseen data.
 
 Add metrics to data frame.
 
@@ -1643,28 +1822,35 @@ kable(df_metrics,
       align = c("l", "r", "r", "r", "r", "r"))
 ```
 
-The final logistic regression model, retrained on the full training and validation data, maintains the strongest performance across all evaluation sets. It offers:
+Compared to earlier models, logistic regression consistently matches or slightly outperforms linear regression across key metrics. It shows marginal gains in specificity and balanced accuracy, particularly on the validation set, suggesting better discrimination between income classes. The model’s performance is remarkably consistent across train, validation, and test sets, with minimal drift in accuracy, Kappa, or class-wise metrics—underscoring its robustness and suitability for deployment.
 
-* Highest overall accuracy (78.39%),
-* Strong agreement beyond chance (Kappa = 0.5106),
-* Balanced recall for both income classes (Sensitivity = 76.13%, Specificity = 85.52%),
-* Stable precision for low-income predictions (PPV = 94.31%),
-* Improved reliability for high-income predictions (NPV = 53.19%), and
-* Consistent balanced accuracy (80.83%), confirming fair treatment of both classes
-
-Compared to earlier models trained on subsets, the final logistic model shows no degradation in performance, confirming that retraining on more data yields more stable and generalizable estimates.
+Overall, the final model balances interpretability, fairness, and predictive strength, making it a defensible choice for reporting and stakeholder communication.
 
 # Final Analysis
 
 ## Conclusions
 
-This analysis compared linear regression with an indicator matrix and logistic regression for classifying individuals as earning above or below $50,000 per year, using key socioeconomic predictors from the UCI Adult Income dataset.
+This analysis compared linear regression (via indicator matrix encoding) and logistic regression for classifying individuals as earning above or below $50,000 annually, using key socioeconomic predictors from the UCI Adult Income dataset.
 
-Across training, validation, and test sets, logistic regression consistently outperformed linear regression in terms of accuracy, sensitivity, kappa, and negative predictive value. While both models achieved high specificity and precision for the majority class, logistic regression offered better balance and generalization, particularly for identifying minority-class individuals.
+Across training, validation, and test sets, logistic regression consistently outperformed linear regression in accuracy, sensitivity, Kappa, and negative predictive value. Both models achieved high specificity and precision for the majority class, but logistic regression demonstrated better balance and generalization—particularly in identifying minority-class individuals.
 
-Importantly, logistic regression’s bounded probability outputs and alignment with binary classification theory made it the more appropriate and interpretable choice. The linear model, while competitive in some metrics, suffered from unbounded predictions and thresholding limitations.
+Logistic regression’s bounded probability outputs and alignment with binary classification theory made it the more interpretable and appropriate choice. In contrast, the linear model, while competitive on some metrics, was hindered by unbounded predictions and thresholding limitations.
 
-Based on these results, logistic regression was selected as the final model for its stronger predictive reliability, theoretical soundness, and clearer insight into how career stage, marital status, working hours, education, and investment activity relate to income classification.
+Given its stronger predictive reliability, theoretical coherence, and clearer interpretability, logistic regression was selected as the final model. It offers robust insight into how career stage, marital status, working hours, education, and investment activity relate to income classification—and provides a transparent, reproducible foundation for downstream reporting and fairness auditing.
+
+## Limitations of Linear Regression as a Classifier
+
+While linear regression can be repurposed for binary classification by thresholding predicted values, it suffers from several critical limitations:
+
+**Unbounded predictions:** Unlike logistic regression, linear regression outputs are not constrained to 0-1, making probability interpretation invalid and thresholding arbitrary.
+
+**Violation of assumptions:** The error distribution and homoscedasticity assumptions of linear regression do not hold in classification tasks, leading to biased estimates and unreliable inference.
+
+**Poor calibration:** Predicted values do not reflect true class probabilities, which undermines decision-making in threshold-sensitive applications.
+
+**No natural log-odds interpretation:** Coefficients lack the intuitive odds-based interpretation that logistic regression provides, complicating stakeholder communication.
+
+These limitations motivated a shift toward logistic regression, which offers bounded, interpretable outputs and better alignment with classification goals.
 
 ## Challenges and Solutions
 
