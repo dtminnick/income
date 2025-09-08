@@ -1081,16 +1081,34 @@ income_train$fitted_0 <- fitted(model_linear_matrix)[,1]
 income_train$resid_1 <- residuals(model_linear_matrix)[,2]
 income_train$fitted_1 <- fitted(model_linear_matrix)[,2]
 
-ggplot(income_train, aes(x = fitted_0, y = resid_0)) +
-  geom_point(alpha = 0.4, color = "steelblue") +
-  geom_smooth(method = "loess", se = FALSE) +
-  labs(title = "Residuals vs Fitted: Class 0", x = "Fitted", y = "Residuals") +
-  theme_minimal()
+income_long <- income_train %>%
+  select(fitted_0, resid_0, fitted_1, resid_1) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c(".value", "class"),
+    names_pattern = "(fitted|resid)_(\\d)"
+  ) %>%
+  mutate(class = paste("Class", class),
+         sqrt_abs_resid = sqrt(abs(resid)))
 
-ggplot(income_train, aes(x = fitted_1, y = resid_1)) +
+
+# ggplot(income_train, aes(x = fitted_0, y = resid_0)) +
+#   geom_point(alpha = 0.4, color = "steelblue") +
+#   geom_smooth(method = "loess", se = FALSE) +
+#   labs(title = "Residuals vs Fitted: Class 0", x = "Fitted", y = "Residuals") +
+#   theme_minimal()
+# 
+# ggplot(income_train, aes(x = fitted_1, y = resid_1)) +
+#   geom_point(alpha = 0.4, color = "steelblue") +
+#   geom_smooth(method = "loess", se = FALSE) +
+#   labs(title = "Residuals vs Fitted: Class 1", x = "Fitted", y = "Residuals") +
+#   theme_minimal()
+
+ggplot(income_long, aes(x = fitted, y = resid)) +
   geom_point(alpha = 0.4, color = "steelblue") +
   geom_smooth(method = "loess", se = FALSE) +
-  labs(title = "Residuals vs Fitted: Class 1", x = "Fitted", y = "Residuals") +
+  facet_wrap(~ class) +
+  labs(title = "Residuals vs Fitted by Class", x = "Fitted", y = "Residuals") +
   theme_minimal()
 
 ```
@@ -1098,59 +1116,124 @@ ggplot(income_train, aes(x = fitted_1, y = resid_1)) +
 #### QQ Normal
 
 ```{r}
-# Class 0
-ggplot(income_train, aes(sample = resid_0)) +
-  stat_qq() +
-  stat_qq_line(color = "red") +
-  labs(title = "QQ Plot: Class 0", x = "Theoretical Quantiles", y = "Sample Quantiles") +
-  theme_minimal()
+# Create QQ data for each class
+qq_data <- list(
+  "Class 0" = income_train$resid_0,
+  "Class 1" = income_train$resid_1
+) %>%
+  purrr::imap_dfr(~ {
+    qq <- qqnorm(.x, plot.it = FALSE)
+    tibble(
+      theoretical = qq$x,
+      sample = qq$y,
+      class = .y
+    )
+  })
 
-# Class 1
-ggplot(income_train, aes(sample = resid_1)) +
+# # Class 0
+# ggplot(income_train, aes(sample = resid_0)) +
+#   stat_qq() +
+#   stat_qq_line(color = "red") +
+#   labs(title = "QQ Plot: Class 0", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+#   theme_minimal()
+# 
+# # Class 1
+# ggplot(income_train, aes(sample = resid_1)) +
+#   stat_qq() +
+#   stat_qq_line(color = "red") +
+#   labs(title = "QQ Plot: Class 1", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+#   theme_minimal()
+
+ggplot(qq_data, aes(sample = sample)) +
   stat_qq() +
   stat_qq_line(color = "red") +
-  labs(title = "QQ Plot: Class 1", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  facet_wrap(~ class) +
+  labs(title = "QQ Plot by Class",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
   theme_minimal()
 ```
+
+Both QQ plots for both classes look reasonable and support the assumption of approximate normality. The points closely follow the red reference line, especially through the central quantiles, which suggests that the residuals are symmetrically distributed and not heavily skewed. There are mild deviations at the tails, but nothing egregious.
+
+In context, this normality suggests that the residuals aren’t misspecified, even if the scale-location plots reveal heteroscedasticity (see below). The residuals may have non-constant variance, but their distribution is still roughly normal.
 
 #### Scale Location
 
 ```{r}
 # Class 0
-ggplot(income_train, aes(x = fitted_0, y = sqrt(abs(resid_0)))) +
-  geom_point(alpha = 0.4, color = "steelblue") +
-  geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
-  labs(title = "Scale-Location Plot: Class 0", x = "Fitted Values", y = "√|Residuals|") +
-  theme_minimal()
+# ggplot(income_train, aes(x = fitted_0, y = sqrt(abs(resid_0)))) +
+#   geom_point(alpha = 0.4, color = "steelblue") +
+#   geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
+#   labs(title = "Scale-Location Plot: Class 0", x = "Fitted Values", y = "√|Residuals|") +
+#   theme_minimal()
+# 
+# # Class 1
+# ggplot(income_train, aes(x = fitted_1, y = sqrt(abs(resid_1)))) +
+#   geom_point(alpha = 0.4, color = "steelblue") +
+#   geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
+#   labs(title = "Scale-Location Plot: Class 1", x = "Fitted Values", y = "√|Residuals|") +
+#   theme_minimal()
 
-# Class 1
-ggplot(income_train, aes(x = fitted_1, y = sqrt(abs(resid_1)))) +
+ggplot(income_long, aes(x = fitted, y = sqrt_abs_resid)) +
   geom_point(alpha = 0.4, color = "steelblue") +
-  geom_smooth(method = "loess", se = FALSE, color = "darkblue") +
-  labs(title = "Scale-Location Plot: Class 1", x = "Fitted Values", y = "√|Residuals|") +
+  geom_smooth(method = "loess", se = FALSE) +
+  facet_wrap(~ class) +
+  labs(title = "Scale-Location Plot by Class",
+       x = "Fitted Values",
+       y = expression(sqrt("|Residuals|"))) +
   theme_minimal()
 
 ```
+
+The unbounded residuals are a direct consequence of using a linear model on an indicator matrix for classification. Since the model isn't constrained to output probabilities between 0 and 1, it can produce fitted values (and thus residuals) that extend well beyond that range.
+
+The curved shape of the scale-location plots indicates heteroscedasticity, with residual variance increasing at the extremes of fitted values — a sign that the model is less stable when it’s most confident. This fan-like spread suggests that prediction error grows with predicted probability, potentially due to class imbalance or unmodeled nonlinear effects. The overall symmetry of the residuals is reassuring, but any asymmetry or tail heaviness would point to bias or structural misfit, reinforcing the need for a model that better captures bounded probabilities and variance behavior.
 
 #### Leverage and Influential Points
 
 ```{r}
-model_0 <- lm(response_matrix[, "factor(G)0"] ~ ., data = predictors)
-model_1 <- lm(response_matrix[, "factor(G)1"] ~ ., data = predictors)
+# Extract design matrix and leverage.
 
-plot(model_0, which = 5)
-plot(model_1, which = 5)
+X <- model.matrix(model_linear_matrix)
 
+H <- X %*% solve(t(X) %*% X) %*% t(X)
+
+leverage_vec <- diag(H)
+
+p <- ncol(X)
+
+# Get residuals matrix.
+
+resid_mat <- residuals(model_linear_matrix)  # n x k
+
+sigma_sq_vec <- apply(resid_mat, 2, function(r) mean(r^2))  # per class
+
+# Compute Cook's distance per class.
+
+cooks_df <- as_tibble(resid_mat) %>%
+  mutate(index = row_number()) %>%
+  pivot_longer(-index, names_to = "class", values_to = "resid") %>%
+  mutate(leverage = rep(leverage_vec, times = ncol(resid_mat)),
+         sigma_sq = rep(sigma_sq_vec, each = nrow(resid_mat)),
+         cooks = (resid^2 / (p * sigma_sq)) * (leverage / (1 - leverage)^2))
+
+# Plot residuals vs. leverage, colored by Cook's distance.
+
+ggplot(cooks_df, aes(x = leverage, y = resid, color = cooks)) +
+  geom_point(alpha = 0.6) +
+  scale_color_gradient(low = "gray70", high = "red") +
+  geom_smooth(method = "loess", se = FALSE, color = "blue", linetype = "dotted") +
+  facet_wrap(~ class) +
+  labs(title = "Residuals vs. Leverage by Class",
+       subtitle = "Color intensity reflects Cook's Distance",
+       x = "Leverage",
+       y = "Residual",
+       color = "Cook's D") +
+  theme_minimal()
 ```
 
-To assess whether residual structure was due to model misspecification, I extended the linear matrix model with spline terms, higher-order polynomials, and in the last interaction, which I use for this report, interaction terms. However, residual plots continued to show systematic deviations across categorical subgroups and skewed distributions.
-
-This suggests that the residual issues are not due to omitted nonlinear effects, but rather stem from the structural limitations of using a linear regression framework for binary classification. Specifically:
-
-* The residuals are differences between binary outcomes and continuous predictions, which are inherently heteroscedastic and asymmetric, and
-* Even with flexible terms, the model cannot fully respect the bounded nature of probabilities or the discrete nature of the response.
-
-To contextualize model selection and assess the tradeoffs in predictive performance and interpretability, I include the linear matrix model in this evaluation. It's performance metrics and residual behavior are analyzed alongside the logistic regression model to provide a comparative baseline and highlight the limitations of linear approaches in binary classification tasks.
+I assessed model influence using leverage and Cook’s distance diagnostics. Most observations showed low to moderate leverage, with no class-specific imbalance. A few cases combined high leverage and large residuals, indicating potential influence, but these were evenly distributed across income groups. Residual patterns were stable, supporting the model’s fairness and structural integrity.
 
 ### Predict Class Scores
 
